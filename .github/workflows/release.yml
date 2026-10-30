@@ -19,6 +19,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Stamp the version
+        shell: bash
+        run: |
+          V="${{ inputs.version || github.ref_name }}"; V="${V#v}"
+          sed -i "0,/^version = .*/s//version = \"$V\"/" pc/Cargo.toml
+          grep -m1 '^version' pc/Cargo.toml
       - run: cargo test --release
         working-directory: pc
       - run: cargo build --release
@@ -36,9 +42,24 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      # Every release must be signed with the same key, or phones can't update in place.
+      - name: Release key
+        env:
+          KEYSTORE_B64: ${{ secrets.DROPCOPY_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then echo "::error::DROPCOPY_KEYSTORE_B64 secret is missing"; exit 1; fi
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/dropcopy.p12"
+          echo "DROPCOPY_KEYSTORE=$RUNNER_TEMP/dropcopy.p12" >> "$GITHUB_ENV"
       # ubuntu-latest ships the Android SDK (ANDROID_HOME is set).
-      - run: ./gradlew --no-daemon assembleRelease testReleaseUnitTest
+      - name: Build and test
         working-directory: android
+        env:
+          DROPCOPY_KEYSTORE_PASSWORD: ${{ secrets.DROPCOPY_KEYSTORE_PASSWORD }}
+        run: |
+          V="${{ inputs.version || github.ref_name }}"; V="${V#v}"
+          IFS=. read -r MA MI PA <<< "$V"
+          ./gradlew --no-daemon -PappVersionName="$V" -PappVersionCode=$((MA*10000 + MI*100 + PA)) assembleRelease testReleaseUnitTest
+          "$ANDROID_HOME"/build-tools/*/apksigner verify --print-certs app/build/outputs/apk/release/app-release.apk | head -3
       - run: mv android/app/build/outputs/apk/release/app-release.apk DropCopy.apk
       - uses: actions/upload-artifact@v4
         with:
@@ -61,6 +82,6 @@ jobs:
             dropcopy.exe
             DropCopy.apk
           body: |
-            **PC (Windows):** download `dropcopy.exe`, double-click it, allow it through the firewall on Private networks.
-            **Phone (Android 10+):** install `DropCopy.apk`, open it, tap *Scan pairing code* and scan the QR code on the PC.
-            Then share a photo to DropCopy and press Ctrl+V on the PC.
+            **PC (Windows):** download `dropcopy.exe`, run it once, then `dropcopy setup` to keep it running in the background. It updates itself from here on.
+            **Phone (Android 10+):** install `DropCopy.apk`, open it and scan the QR code the PC shows. It updates itself from here on.
+            Share a photo to DropCopy and press Ctrl+V on the PC, or drag the little phone above the taskbar into any app.
