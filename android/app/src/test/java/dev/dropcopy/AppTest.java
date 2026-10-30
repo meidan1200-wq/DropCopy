@@ -221,7 +221,7 @@ public class AppTest {
         org.robolectric.android.controller.ActivityController<MainActivity> c = Robolectric.buildActivity(MainActivity.class).setup();
         MainActivity a = c.get();
         assertEquals("My PC", ((android.widget.TextView) a.findViewById(R.id.pc_name)).getText().toString());
-        assertEquals("Pair another PC", ((android.widget.Button) a.findViewById(R.id.scan)).getText().toString());
+        assertEquals("Check connection", ((android.widget.Button) a.findViewById(R.id.scan)).getText().toString());
         assertEquals(android.view.View.VISIBLE, a.findViewById(R.id.check).getVisibility());
         // Tapping the row (not only the switch) turns the setting on and starts the background service.
         shadowOf(app).grantPermissions(android.Manifest.permission.BLUETOOTH_ADVERTISE);

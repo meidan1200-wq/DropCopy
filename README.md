@@ -38,6 +38,22 @@ phone: Share → DropCopy        PC: file saved to Pictures\DropCopy
 | Copy something, tap the **Send clipboard** tile | The phone's clipboard (text or image) goes to the PC's clipboard. |
 | Turn on **Auto-send new screenshots** (or camera photos), then take a screenshot | Zero taps: it's on the PC's clipboard a moment later. |
 
+**The little phone.** When a photo arrives, a small phone with the photo on its screen rises from the middle
+of the taskbar. Drag it into any app (chat, mail, Word, a folder) to drop the file there, click it to open,
+or leave it and it slides away after a few seconds; hovering keeps it up. `dropcopy set popup off` turns it off.
+
+**Bring the phone close.** Turn on *Show on PC when near* in the app. Hold the phone next to your laptop and
+the last photo it sent pops up again, ready to drag. It works over Bluetooth Low Energy: while the screen is
+on, the phone broadcasts a token that changes every minute and only your PC can recognise; the PC watches its
+signal strength. Laptops work best (the Bluetooth antenna is in the lid or keyboard). Run `dropcopy near` to
+see live readings and `dropcopy set near_rssi -50` to make "close" closer (higher) or farther (lower).
+
+**Updates.** Both apps update themselves from this repository's releases. The PC's background copy checks
+shortly after start and every 6 hours, verifies the download's SHA-256, swaps itself and restarts; run
+`dropcopy update` to do it now. The phone checks daily on Wi-Fi and installs through Android's installer;
+from the second update on, Android 12+ installs it without asking. Settings: `dropcopy set` (PC), the *App*
+section (phone).
+
 On the PC every file is saved to `Pictures\DropCopy` (change with `dropcopy dir D:\Somewhere`), and:
 
 - **one image** → clipboard holds it as a *picture and a file*: Ctrl+V in WhatsApp/Discord/Slack/Gmail/
@@ -45,7 +61,8 @@ On the PC every file is saved to `Pictures\DropCopy` (change with `dropcopy dir 
 - **several files** → clipboard holds the file list (paste in Explorer, or attach in a chat/mail).
 - **text / links** → clipboard holds the text.
 
-`--clip image|file|off` changes that. Other commands: `dropcopy --help`.
+`--clip image|file|off` changes that. `dropcopy doctor` checks network, drag and drop and updates.
+Other commands: `dropcopy --help`.
 
 ## Why it is fast
 
@@ -99,14 +116,18 @@ cd pc && cargo build --release --target x86_64-pc-windows-gnu
 cd android && ./gradlew assembleRelease   # app/build/outputs/apk/release/app-release.apk
 ```
 
-The release APK is signed with your local debug key (fine for sideloading); a build from another machine
-has a different key, so uninstall the old one first.
+Releases are built by GitHub Actions (`.github/workflows/release.yml`; Actions tab → Release → Run workflow,
+enter a version). The APK is signed with the release key from the `DROPCOPY_KEYSTORE_B64` and
+`DROPCOPY_KEYSTORE_PASSWORD` secrets, so every version installs over the last; the workflow refuses to
+publish without them. Local builds without the secrets use the debug key and can't update a released app.
 
 ## Tests
 
 ```bash
-cd pc && cargo test --release                      # protocol, crypto, files, discovery (12 tests)
-cd android && ./gradlew testReleaseUnitTest        # Android glue on Robolectric (6 tests)
+cd pc && cargo test --release                      # protocol, files, discovery, proximity, updates (21 tests)
+cd android && ./gradlew testReleaseUnitTest        # Android on Robolectric (13 tests)
+DROPCOPY_SHOTS=/tmp/shots ./gradlew testReleaseUnitTest --tests '*Screenshot*'   # renders the main screen
+cargo run --release --example phone_preview photo.jpg /tmp   # renders the taskbar phone
 # Android tests against a live receiver, and the phone's protocol code on a desktop JVM:
 DROPCOPY_TEST_LINK="$(dropcopy pair | grep -o 'dropcopy://[^ ]*')" DROPCOPY_TEST_DIR="$(dropcopy dir)" ./gradlew testReleaseUnitTest
 javac -d /tmp/jt app/src/main/java/dev/dropcopy/Proto.java jvmtest/ProtoTest.java && java -cp /tmp/jt ProtoTest "<link>" photo.jpg

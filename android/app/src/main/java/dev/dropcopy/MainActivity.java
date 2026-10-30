@@ -50,8 +50,12 @@ public class MainActivity extends Activity {
         updateCard = findViewById(R.id.update_card);
         ((TextView) findViewById(R.id.version)).setText("v" + BuildConfig.VERSION_NAME);
 
-        scan.setOnClickListener(v -> scan());
-        check.setOnClickListener(v -> check());
+        // Unpaired: [Scan pairing code]. Paired: [Check connection] [Pair new], so the everyday
+        // action is the prominent one. The two buttons swap roles rather than styles.
+        scan.setOnClickListener(v -> {
+            if (Store.pcs(this).isEmpty()) scan(); else check();
+        });
+        check.setOnClickListener(v -> scan());
         View pasteRow = findViewById(R.id.paste_row);
         findViewById(R.id.paste_toggle).setOnClickListener(v -> pasteRow.setVisibility(pasteRow.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
         EditText link = findViewById(R.id.link);
@@ -121,7 +125,9 @@ public class MainActivity extends Activity {
         List<Proto.Pc> pcs = Store.pcs(this);
         boolean paired = !pcs.isEmpty();
         check.setVisibility(paired ? View.VISIBLE : View.GONE);
-        scan.setText(paired ? "Pair another PC" : "Scan pairing code");
+        check.setText("Pair new");
+        scan.setText(paired ? "Check connection" : "Scan pairing code");
+        findViewById(R.id.paste_toggle).setVisibility(paired ? View.GONE : View.VISIBLE);
         if (!checking) {
             if (paired) {
                 Proto.Pc pc = pcs.get(0);
@@ -152,6 +158,7 @@ public class MainActivity extends Activity {
                 .startScan()
                 .addOnSuccessListener(b -> pair(b.getRawValue()))
                 .addOnFailureListener(e -> {
+                    findViewById(R.id.paste_toggle).setVisibility(View.VISIBLE);
                     findViewById(R.id.paste_row).setVisibility(View.VISIBLE);
                     Transfer.toast(this, "Scanner unavailable here - paste the link the PC shows");
                 });

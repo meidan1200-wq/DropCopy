@@ -13,4 +13,7 @@
     <color name="idle">#5F646C</color>
     <color name="danger">#FF7070</color>
     <color name="ripple">#24FFFFFF</color>
+    <color name="track_on">#806E9BFF</color>
+    <color name="track_off">#3D4047</color>
+    <color name="thumb_off">#B9BEC6</color>
 </resources>
