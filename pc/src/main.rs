@@ -23,8 +23,8 @@ USAGE
                                 send to a DropCopy receiver (another PC)
   dropcopy dir [PATH]           show or change where received files are saved
   dropcopy name [NAME]          show or change the name phones see
-  dropcopy setup                Windows: start with Windows, allow through the firewall
-  dropcopy unsetup              undo setup
+  dropcopy setup                Windows: run in the background, start with Windows
+  dropcopy unsetup              stop it and undo setup
 
 OPTIONS
   --clip both|image|file|off    what goes on the clipboard (default: both)
@@ -44,6 +44,7 @@ struct Args {
     png: bool,
     invert: bool,
     hidden: bool,
+    background: bool,
 }
 
 fn parse() -> Result<Args, String> {
@@ -59,6 +60,7 @@ fn parse() -> Result<Args, String> {
         png: false,
         invert: false,
         hidden: false,
+        background: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -75,6 +77,7 @@ fn parse() -> Result<Args, String> {
             "--png" => a.png = true,
             "--invert" => a.invert = true,
             "--hidden" => a.hidden = true,
+            "--background" => a.background = true,
             s if s.starts_with("--") => return Err(format!("unknown option {s}")),
             _ if a.cmd.is_none() => a.cmd = Some(arg),
             _ => a.rest.push(arg),
@@ -151,6 +154,9 @@ fn serve(cfg: Config, first_run: bool, a: &Args) -> Result<(), String> {
     if a.hidden && setup::detach() {
         return Ok(());
     }
+    if a.background {
+        dropcopy::log_to(&cfg.home);
+    }
     let cfg = Arc::new(cfg);
     let server = Server::bind(cfg.clone(), ServeOpts { port: a.port, clip: a.clip, discovery: true }).map_err(|e| {
         if e.kind() == std::io::ErrorKind::AddrInUse {
@@ -216,10 +222,15 @@ mod setup {
 
     /// Restarts this command without a console window. Returns true in the parent, which should exit.
     pub fn detach() -> bool {
+        let Ok(exe) = std::env::current_exe() else { return false };
+        let mut args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--hidden").collect();
+        args.push("--background".into());
+        spawn_hidden(&exe.display().to_string(), &args)
+    }
+
+    fn spawn_hidden(exe: &str, args: &[String]) -> bool {
         const DETACHED_PROCESS: u32 = 0x0000_0008;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        let Ok(exe) = std::env::current_exe() else { return false };
-        let args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--hidden").collect();
         Command::new(exe)
             .args(args)
             .stdin(Stdio::null())
@@ -234,25 +245,51 @@ mod setup {
         cmd.stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false)
     }
 
+    /// Where the autostarted copy lives, so startup doesn't depend on the Downloads folder.
+    fn installed_exe() -> Option<std::path::PathBuf> {
+        let base = std::env::var_os("LOCALAPPDATA")?;
+        Some(std::path::PathBuf::from(base).join("DropCopy").join("dropcopy.exe"))
+    }
+
+    fn stop_background() {
+        // The background copy is the installed one; an interactive window elsewhere keeps running.
+        if let Some(exe) = installed_exe() {
+            let filter = format!("$p = '{}'; Get-Process dropcopy -ErrorAction SilentlyContinue | Where-Object Path -eq $p | Stop-Process -Force", exe.display());
+            quiet(Command::new("powershell").args(["-NoProfile", "-Command", &filter]));
+        }
+    }
+
     pub fn install() -> Result<(), String> {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let exe = exe.display().to_string();
+        let current = std::env::current_exe().map_err(|e| e.to_string())?;
+        let target = installed_exe().ok_or("LOCALAPPDATA is not set")?;
+        stop_background();
+        std::fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
+        if current != target {
+            std::fs::copy(&current, &target).map_err(|e| format!("copying to {}: {e}", target.display()))?;
+        }
+        let exe = target.display().to_string();
         let value = format!("\"{exe}\" --hidden");
         if !quiet(Command::new("reg").args(["add", RUN_KEY, "/v", "DropCopy", "/t", "REG_SZ", "/d", &value, "/f"])) {
             return Err("could not add DropCopy to startup".into());
         }
-        say!("  DropCopy will start (hidden) when you sign in to Windows.");
+        say!("  Installed to {exe}");
+        say!("  It starts hidden every time you sign in, and waits quietly when there is no network.");
+        // Transfers are authenticated with the pairing key, so allowing every profile is safe and
+        // keeps it working when Windows labels a home Wi-Fi "Public".
         let rule = format!(
-            "advfirewall firewall add rule name=DropCopy dir=in action=allow enable=yes profile=private,domain program=\"{exe}\""
+            "advfirewall firewall add rule name=DropCopy dir=in action=allow enable=yes profile=any program=\"{exe}\""
         );
         let _ = quiet(Command::new("netsh").raw_arg("advfirewall firewall delete rule name=DropCopy"));
         if quiet(Command::new("netsh").raw_arg(&rule)) {
-            say!("  Firewall: allowed on private networks.");
+            say!("  Firewall: allowed.");
         } else {
-            say!("  Firewall: not changed (needs an administrator terminal). When Windows asks on first");
-            say!("  run, tick \"Private networks\" and click Allow. Your Wi-Fi must be set to Private.");
+            say!("  Firewall: Windows will ask once when it starts - click Allow (tick both boxes).");
+            say!("  (Or run `dropcopy setup` from an administrator terminal to skip the prompt.)");
         }
-        say!("  Start it now without a window:  dropcopy --hidden");
+        if spawn_hidden(&exe, &["--background".to_string()]) {
+            say!("  Running now in the background. You can close this window.");
+            say!("  Log: %APPDATA%\\DropCopy\\log.txt   Stop and remove: dropcopy unsetup");
+        }
         Ok(())
     }
 
@@ -269,17 +306,21 @@ mod setup {
             if let Ok(o) = out {
                 let names = String::from_utf8_lossy(&o.stdout).trim().replace("\r\n", ", ");
                 if !names.is_empty() {
-                    say!("  ! Windows treats \"{names}\" as a Public network, which blocks your phone.");
-                    say!("    Fix: Settings > Network & internet > Wi-Fi > {names} > Network profile: Private\n");
+                    say!("  Note: Windows calls \"{names}\" a Public network. If your phone can't connect, either run");
+                    say!("  `dropcopy setup`, or set Settings > Network & internet > Wi-Fi > {names} > Private.\n");
                 }
             }
         });
     }
 
     pub fn uninstall() -> Result<(), String> {
+        stop_background();
         quiet(Command::new("reg").args(["delete", RUN_KEY, "/v", "DropCopy", "/f"]));
         quiet(Command::new("netsh").raw_arg("advfirewall firewall delete rule name=DropCopy"));
-        say!("  Removed from startup (and the firewall rule, if this terminal is an administrator).");
+        if let Some(exe) = installed_exe() {
+            let _ = std::fs::remove_file(exe);
+        }
+        say!("  Stopped and removed from startup (and the firewall rule, if this terminal is an administrator).");
         Ok(())
     }
 }

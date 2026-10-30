@@ -144,4 +144,43 @@ public class AppTest {
         assertArrayEquals(data, Files.readAllBytes(got.toPath()));
         assertTrue("last address remembered", Store.pcs(app).get(0).host != null);
     }
+
+    /** Offline: the send is queued, then delivered by the outbox once the PC is reachable. */
+    @Test
+    public void unreachablePcQueuesThenDeliversWhenBack() throws Exception {
+        String link = System.getenv("DROPCOPY_TEST_LINK"), dir = System.getenv("DROPCOPY_TEST_DIR");
+        assumeFalse("no live receiver configured", link == null || link.isEmpty());
+        Proto.Pc live = Proto.Pc.parse(link);
+        // Same PC, but "away": nothing listens on this port and discovery gets no answer.
+        Proto.Pc away = new Proto.Pc(new byte[8], live.key, live.name, "127.0.0.1", 9);
+        Store.add(app, away.toLink());
+
+        byte[] data = new byte[300_000];
+        new Random(11).nextBytes(data);
+        Uri uri = Uri.parse("content://dev.dropcopy.test/queued");
+        shadowOf(app.getContentResolver()).registerInputStream(uri, new ByteArrayInputStream(data));
+        try {
+            Transfer.run(app, Collections.singletonList(uri), null, null, null);
+            throw new AssertionError("expected the PC to be unreachable");
+        } catch (Proto.Unreachable expected) {
+            Outbox.add(app, Collections.singletonList(uri), null, null);
+        }
+        assertTrue(!Outbox.isEmpty(app));
+        assertNotNull("retry job scheduled", app.getSystemService(android.app.job.JobScheduler.class).getPendingJob(7));
+        try {
+            Outbox.flush(app);
+            throw new AssertionError("still away");
+        } catch (Proto.Unreachable expected) {
+            assertTrue("kept for later", !Outbox.isEmpty(app));
+        }
+
+        Store.forgetAll(app);
+        Store.add(app, link); // the PC is back
+        assertEquals(1, Outbox.flush(app));
+        assertTrue(Outbox.isEmpty(app));
+        File[] got = new File(dir).listFiles((d, n) -> n.startsWith("shared_"));
+        boolean found = false;
+        for (File f : got) found |= java.util.Arrays.equals(data, Files.readAllBytes(f.toPath()));
+        assertTrue("queued file arrived intact", found);
+    }
 }

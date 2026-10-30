@@ -64,6 +64,13 @@ public class SendService extends Service {
             };
             try {
                 Transfer.toast(this, "✓ " + Transfer.run(this, uris, text, pc, progress));
+            } catch (Proto.Unreachable e) {
+                try {
+                    Outbox.add(this, uris, text, pc);
+                    Transfer.toast(this, "PC not reachable - it will send by itself when you're back on your Wi-Fi");
+                } catch (Exception q) {
+                    Transfer.toast(this, "Not sent: " + e.getMessage());
+                }
             } catch (Exception e) {
                 Transfer.toast(this, "Not sent: " + e.getMessage()
                         + "\nIs dropcopy running on the PC, on the same Wi-Fi?");

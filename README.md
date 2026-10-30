@@ -18,8 +18,10 @@ phone: Share → DropCopy        PC: file saved to Pictures\DropCopy
 1. Run `dropcopy.exe`. It prints a QR code.
 2. When Windows Firewall asks, tick **Private networks** → Allow. Your Wi-Fi must be set to *Private*
    (Settings → Network → Wi-Fi → your network → Private), or inbound connections are blocked.
-3. Optional: `dropcopy setup` — starts hidden at sign-in. Run it from an administrator terminal to
-   also add the firewall rule for you.
+3. Recommended: `dropcopy setup` — installs it to `%LOCALAPPDATA%\DropCopy`, starts it in the background
+   now and at every sign-in, with no window. It waits quietly when there is no network and picks up as soon
+   as there is. Log: `%APPDATA%\DropCopy\log.txt`. Undo with `dropcopy unsetup`. From an administrator
+   terminal it also adds the firewall rule, so Windows never asks.
 
 **Phone**
 
@@ -70,6 +72,7 @@ Over Wi-Fi expect the link speed (typically 20–80 MB/s) plus a few ms of setup
 |---|---|
 | Android won't let apps read the clipboard in the background | The QS tile opens an invisible window for an instant (focused apps *may* read it), sends, closes. Auto-send watches for new screenshots instead of the clipboard. |
 | Wi-Fi without internet makes Android route traffic over mobile data | The app races the connection over every network the phone has (Wi-Fi explicitly, and the default route) — whichever reaches the PC wins. |
+| The phone is off Wi-Fi, or the PC is off | The send is queued on the phone and goes out by itself when a network returns (also after a reboot); no error to dismiss. |
 | The PC's IP changes (DHCP) | Authenticated UDP discovery runs in parallel with the direct connect; the new address is remembered. |
 | Windows clipboard formats differ per app | Picture as CF_DIB + original PNG/JFIF + CF_HDROP file list in one clipboard write. |
 

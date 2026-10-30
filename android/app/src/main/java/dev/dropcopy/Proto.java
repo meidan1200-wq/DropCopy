@@ -150,6 +150,11 @@ public final class Proto {
         public void bind(DatagramSocket s) { }
     };
 
+    /** The PC could not be reached at all (as opposed to refusing this phone). Worth retrying later. */
+    public static final class Unreachable extends IOException {
+        public Unreachable(String msg) { super(msg); }
+    }
+
     public interface Progress {
         void update(long sent, long total);
     }
@@ -334,7 +339,7 @@ public final class Proto {
             }
         }
         String names = pcs.size() == 1 ? pcs.get(0).name : "your PC";
-        throw new IOException("Couldn't find " + names + " on this network"
+        throw new Unreachable("Couldn't find " + names + " on this network"
                 + (last != null && last.getMessage() != null ? " (" + last.getMessage() + ")" : ""));
     }
 

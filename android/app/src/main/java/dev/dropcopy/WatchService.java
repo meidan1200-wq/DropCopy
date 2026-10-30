@@ -95,6 +95,9 @@ public class WatchService extends Service {
                 exec.execute(() -> {
                     try {
                         Transfer.toast(this, "✓ " + Transfer.run(this, Collections.singletonList(uri), null, null, null));
+                    } catch (Proto.Unreachable e) {
+                        // Off Wi-Fi: queue silently; it goes out when the network returns.
+                        try { Outbox.add(this, Collections.singletonList(uri), null, null); } catch (Exception ignored) { }
                     } catch (Exception e) {
                         Transfer.toast(this, "Auto-send failed: " + e.getMessage());
                     }

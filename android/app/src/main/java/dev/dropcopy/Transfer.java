@@ -63,7 +63,10 @@ final class Transfer {
         List<Proto.Item> items = new ArrayList<>();
         if (uris != null) for (Uri u : uris) items.add(item(c, u));
         if (text != null && !text.isEmpty()) items.add(Proto.text(text));
+        return send(c, items, pcHex, progress);
+    }
 
+    static String send(Context c, List<Proto.Item> items, String pcHex, Proto.Progress progress) throws IOException {
         List<Proto.Pc> pcs = Store.pcs(c);
         if (pcHex != null) pcs.removeIf(p -> !p.hexId().equals(pcHex));
         if (pcs.isEmpty()) throw new IOException("Pair your PC first: open DropCopy");
