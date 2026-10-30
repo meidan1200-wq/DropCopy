@@ -36,7 +36,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: android-actions/setup-android@v3
+      # ubuntu-latest ships the Android SDK (ANDROID_HOME is set).
       - run: ./gradlew --no-daemon assembleRelease testReleaseUnitTest
         working-directory: android
       - run: mv android/app/build/outputs/apk/release/app-release.apk DropCopy.apk

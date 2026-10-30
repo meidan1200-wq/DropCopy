@@ -8,6 +8,11 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// The listener binds 0.0.0.0, which Windows refuses as a destination; connect via loopback.
+fn loopback(addr: std::net::SocketAddr) -> String {
+    format!("127.0.0.1:{}", addr.port())
+}
+
 fn temp(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("dropcopy-test-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
@@ -48,7 +53,7 @@ fn files_and_text_arrive_intact() {
         Item::File(src.join("empty.txt")),
         Item::Text("שלום clipboard".into()),
     ];
-    let sent = client::send(&sender, Some(&addr.to_string()), &items).unwrap();
+    let sent = client::send(&sender, Some(&loopback(addr)), &items).unwrap();
     assert_eq!(sent.bytes, 2 * big.len() as u64);
 
     assert_eq!(std::fs::read(save_dir.join("photo.jpg")).unwrap(), big);
@@ -74,7 +79,7 @@ fn wrong_key_is_refused_and_leaves_nothing() {
     let (mut stranger, _) = Config::load_or_create(dir.join("other")).unwrap();
     stranger.last_peer = None;
     std::fs::write(dir.join("x.bin"), b"data").unwrap();
-    let err = client::send(&stranger, Some(&addr.to_string()), &[Item::File(dir.join("x.bin"))]);
+    let err = client::send(&stranger, Some(&loopback(addr)), &[Item::File(dir.join("x.bin"))]);
     assert!(err.is_err());
     assert!(!save_dir.exists() || std::fs::read_dir(&save_dir).unwrap().next().is_none());
 }
