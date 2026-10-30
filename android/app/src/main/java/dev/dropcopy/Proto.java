@@ -135,6 +135,21 @@ public final class Proto {
         };
     }
 
+    /**
+     * A network path to try. On Android there is one per usable network (Wi-Fi, and the default
+     * route); every path is raced, so a Wi-Fi without routes or without internet costs nothing.
+     */
+    public interface Route {
+        Socket newSocket() throws IOException;
+        void bind(DatagramSocket s) throws IOException;
+    }
+
+    /** The OS default route. */
+    public static final Route DEFAULT_ROUTE = new Route() {
+        public Socket newSocket() { return new Socket(); }
+        public void bind(DatagramSocket s) { }
+    };
+
     public interface Progress {
         void update(long sent, long total);
     }
@@ -261,31 +276,41 @@ public final class Proto {
      * and returns the first connection that opens. On an unchanged network the direct connect
      * wins in a few milliseconds; after the PC's address changes, discovery finds it.
      */
-    static Conn connect(final List<Pc> pcs, final List<InetAddress> broadcasts, int timeoutMs) throws IOException {
-        final BlockingQueue<Object> results = new ArrayBlockingQueue<>(64);
+    static Conn connect(final List<Pc> pcs, final List<InetAddress> broadcasts, List<Route> routes, int timeoutMs) throws IOException {
+        final BlockingQueue<Object> results = new ArrayBlockingQueue<>(256);
         final AtomicBoolean done = new AtomicBoolean(false);
         final List<Thread> threads = new ArrayList<>();
+        final List<DatagramSocket> udps = new ArrayList<>();
 
-        for (final Pc pc : pcs) {
-            if (pc.host == null || pc.host.isEmpty()) continue;
+        for (final Route route : routes) {
+            for (final Pc pc : pcs) {
+                if (pc.host == null || pc.host.isEmpty()) continue;
+                threads.add(new Thread(() -> {
+                    try {
+                        results.offer(open(route, pc, pc.host, pc.port, 1500, done));
+                    } catch (IOException e) {
+                        results.offer(e);
+                    }
+                }, "direct-" + pc.name));
+            }
+            final DatagramSocket udp;
+            try {
+                udp = new DatagramSocket();
+                route.bind(udp);
+                udp.setBroadcast(true);
+            } catch (IOException e) {
+                results.offer(e);
+                continue;
+            }
+            udps.add(udp);
             threads.add(new Thread(() -> {
                 try {
-                    results.offer(open(pc, pc.host, pc.port, 1500, done));
+                    discover(route, udp, pcs, broadcasts, done, results);
                 } catch (IOException e) {
                     results.offer(e);
                 }
-            }, "direct-" + pc.name));
+            }, "discover"));
         }
-
-        final DatagramSocket udp = new DatagramSocket();
-        udp.setBroadcast(true);
-        threads.add(new Thread(() -> {
-            try {
-                discover(udp, pcs, broadcasts, done, results);
-            } catch (IOException e) {
-                results.offer(e);
-            }
-        }, "discover"));
 
         for (Thread t : threads) { t.setDaemon(true); t.start(); }
         long deadline = System.currentTimeMillis() + timeoutMs;
@@ -302,7 +327,7 @@ public final class Proto {
             Thread.currentThread().interrupt();
         } finally {
             done.set(true);
-            udp.close();
+            for (DatagramSocket u : udps) u.close();
             // A late winner is closed by open() itself once done is set.
             for (Object r; (r = results.poll()) != null; ) {
                 if (r instanceof Conn) try { ((Conn) r).socket.close(); } catch (IOException ignored) { }
@@ -313,8 +338,8 @@ public final class Proto {
                 + (last != null && last.getMessage() != null ? " (" + last.getMessage() + ")" : ""));
     }
 
-    private static Conn open(Pc pc, String host, int port, int timeoutMs, AtomicBoolean done) throws IOException {
-        Socket s = new Socket();
+    private static Conn open(Route route, Pc pc, String host, int port, int timeoutMs, AtomicBoolean done) throws IOException {
+        Socket s = route.newSocket();
         try {
             s.setTcpNoDelay(true);
             s.connect(new InetSocketAddress(host, port), timeoutMs);
@@ -329,7 +354,7 @@ public final class Proto {
         return new Conn(s, pc, host, port);
     }
 
-    private static void discover(DatagramSocket udp, List<Pc> pcs, List<InetAddress> broadcasts,
+    private static void discover(Route route, DatagramSocket udp, List<Pc> pcs, List<InetAddress> broadcasts,
                                  AtomicBoolean done, BlockingQueue<Object> results) throws IOException {
         byte[] nonce = random(16);
         List<byte[]> packets = new ArrayList<>();
@@ -378,7 +403,7 @@ public final class Proto {
                 final int p = port;
                 if (!started.add(pc.hexId() + "@" + host + ":" + p)) continue; // replies to repeated broadcasts
                 Thread t = new Thread(() -> {
-                    try { results.offer(open(pc, host, p, 1500, done)); } catch (IOException e) { results.offer(e); }
+                    try { results.offer(open(route, pc, host, p, 1500, done)); } catch (IOException e) { results.offer(e); }
                 }, "found-" + pc.name);
                 t.setDaemon(true);
                 t.start();
@@ -390,9 +415,13 @@ public final class Proto {
 
     /** Finds a PC from {@code pcs}, sends {@code items}, and waits for the PC to confirm. */
     public static Result send(List<Pc> pcs, List<InetAddress> broadcasts, List<Item> items, Progress progress) throws IOException {
+        return send(pcs, broadcasts, Collections.singletonList(DEFAULT_ROUTE), items, progress);
+    }
+
+    public static Result send(List<Pc> pcs, List<InetAddress> broadcasts, List<Route> routes, List<Item> items, Progress progress) throws IOException {
         if (pcs.isEmpty()) throw new IOException("No PC paired yet");
         long t0 = System.currentTimeMillis();
-        Conn c = connect(pcs, broadcasts, 4000);
+        Conn c = connect(pcs, broadcasts, routes, 4000);
         Result res = new Result();
         res.pc = c.pc;
         res.host = c.host;

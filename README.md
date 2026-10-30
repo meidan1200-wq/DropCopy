@@ -60,6 +60,8 @@ On the PC every file is saved to `Pictures\DropCopy` (change with `dropcopy dir 
 - Photos keep their orientation (EXIF) when pasted as a picture.
 
 Measured in development (loopback, not Wi-Fi): 9 MB photo received in 34 ms; clipboard ready in 3–25 ms.
+Also run end to end on Android 11 (emulator, software-only) against the Windows build: pairing, Share → DropCopy,
+clipboard send and screenshot auto-send all delivered byte-identical files to the PC clipboard.
 Over Wi-Fi expect the link speed (typically 20–80 MB/s) plus a few ms of setup.
 
 ## Working around the OS limits
@@ -67,7 +69,7 @@ Over Wi-Fi expect the link speed (typically 20–80 MB/s) plus a few ms of setup
 | Limit | Workaround |
 |---|---|
 | Android won't let apps read the clipboard in the background | The QS tile opens an invisible window for an instant (focused apps *may* read it), sends, closes. Auto-send watches for new screenshots instead of the clipboard. |
-| Wi-Fi without internet makes Android route traffic over mobile data | The app pins itself to the Wi-Fi network before sending. |
+| Wi-Fi without internet makes Android route traffic over mobile data | The app races the connection over every network the phone has (Wi-Fi explicitly, and the default route) — whichever reaches the PC wins. |
 | The PC's IP changes (DHCP) | Authenticated UDP discovery runs in parallel with the direct connect; the new address is remembered. |
 | Windows clipboard formats differ per app | Picture as CF_DIB + original PNG/JFIF + CF_HDROP file list in one clipboard write. |
 

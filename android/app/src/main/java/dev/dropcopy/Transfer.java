@@ -15,6 +15,8 @@ import android.widget.Toast;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.DatagramSocket;
+import java.net.Socket;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -66,8 +68,7 @@ final class Transfer {
         if (pcHex != null) pcs.removeIf(p -> !p.hexId().equals(pcHex));
         if (pcs.isEmpty()) throw new IOException("Pair your PC first: open DropCopy");
 
-        bindToLan(c);
-        Proto.Result r = Proto.send(pcs, Proto.broadcastAddresses(), items, progress);
+        Proto.Result r = Proto.send(pcs, Proto.broadcastAddresses(), routes(c), items, progress);
         Store.remember(c, r.pc);
         if (items.isEmpty()) return "Connected to " + r.pc.name + " (" + r.totalMillis + " ms)";
         String what = items.size() == 1 ? (items.get(0).text() != null ? "Text" : items.get(0).name()) : items.size() + " items";
@@ -75,22 +76,30 @@ final class Transfer {
     }
 
     /**
-     * When Wi-Fi has no internet, Android may make mobile data the default network and LAN
-     * addresses become unreachable. Pin this app to Wi-Fi (or Ethernet) whenever one is up.
+     * Paths to race: every network the phone has, Wi-Fi first, plus the default route. When Wi-Fi
+     * has no internet Android may make mobile data the default and LAN addresses unreachable
+     * through it; when this phone is the hotspot only the default route reaches the PC; some
+     * devices (emulators, USB/Ethernet adapters) put the LAN on an unexpected network type.
+     * Racing them all needs no guess about which case this is; a dead path simply loses.
      */
     @SuppressWarnings("deprecation")
-    static void bindToLan(Context c) {
+    static List<Proto.Route> routes(Context c) {
+        List<Proto.Route> out = new ArrayList<>();
         ConnectivityManager cm = c.getSystemService(ConnectivityManager.class);
-        if (cm == null) return;
-        for (Network n : cm.getAllNetworks()) {
-            NetworkCapabilities nc = cm.getNetworkCapabilities(n);
-            if (nc != null && (nc.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-                    || nc.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))) {
-                cm.bindProcessToNetwork(n);
-                return;
+        if (cm != null) {
+            for (final Network n : cm.getAllNetworks()) {
+                NetworkCapabilities nc = cm.getNetworkCapabilities(n);
+                if (nc == null) continue;
+                boolean lan = nc.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                        || nc.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET);
+                out.add(lan ? 0 : out.size(), new Proto.Route() {
+                    public Socket newSocket() throws IOException { return n.getSocketFactory().createSocket(); }
+                    public void bind(DatagramSocket s) throws IOException { n.bindSocket(s); }
+                });
             }
         }
-        cm.bindProcessToNetwork(null); // e.g. this phone is the hotspot: use the normal routes
+        out.add(Proto.DEFAULT_ROUTE);
+        return out;
     }
 
     static String human(long n) {
