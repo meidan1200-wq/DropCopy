@@ -1,0 +1,60 @@
+name: Release
+
+# Push a tag like v0.1.0 to build the Windows receiver and the Android app
+# and publish them as a GitHub release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test --release
+        working-directory: pc
+      - run: cargo build --release
+        working-directory: pc
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: pc/target/release/dropcopy.exe
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - run: ./gradlew --no-daemon assembleRelease testReleaseUnitTest
+        working-directory: android
+      - run: mv android/app/build/outputs/apk/release/app-release.apk DropCopy.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: DropCopy.apk
+
+  release:
+    needs: [windows, android]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dropcopy.exe
+            DropCopy.apk
+          body: |
+            **PC (Windows):** download `dropcopy.exe`, double-click it, allow it through the firewall on Private networks.
+            **Phone (Android 10+):** install `DropCopy.apk`, open it, tap *Scan pairing code* and scan the QR code on the PC.
+            Then share a photo to DropCopy and press Ctrl+V on the PC.
