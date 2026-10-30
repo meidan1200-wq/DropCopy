@@ -1,0 +1,52 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "dev.dropcopy"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "dev.dropcopy"
+        // Android 10: sharing shortcuts (the PC icon in the share sheet) need it.
+        minSdk 29
+        targetSdk 35
+        versionCode 1
+        versionName "0.1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+            // Sideloaded personal app: sign with the local debug key so `assembleRelease`
+            // works out of the box. Use your own keystore to publish it.
+            signingConfig signingConfigs.debug
+        }
+    }
+
+    testOptions {
+        unitTests {
+            includeAndroidResources = true
+            all {
+                // Point these at a running `dropcopy` receiver to include the live-network tests.
+                environment "DROPCOPY_TEST_LINK", System.getenv("DROPCOPY_TEST_LINK") ?: ""
+                environment "DROPCOPY_TEST_DIR", System.getenv("DROPCOPY_TEST_DIR") ?: ""
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    // Google's QR scanner UI: runs inside Play services, needs no camera permission.
+    implementation "com.google.android.gms:play-services-code-scanner:16.1.0"
+
+    testImplementation "junit:junit:4.13.2"
+    testImplementation "org.robolectric:robolectric:4.14.1"
+}

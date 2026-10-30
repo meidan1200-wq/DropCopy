@@ -1,0 +1,218 @@
+//! The receiver: answers discovery, accepts transfers, saves files, fills the clipboard.
+
+use crate::clipboard::{self, ClipMode};
+use crate::config::Config;
+use crate::proto::*;
+use crate::util::{human_size, sanitize_filename, unique_path};
+use std::fs::{self, File};
+use std::io::{self, BufReader, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+
+pub struct ServeOpts {
+    pub port: u16,
+    pub clip: ClipMode,
+    /// Answer UDP discovery broadcasts (off only in tests that run side by side).
+    pub discovery: bool,
+}
+
+/// What one connection delivered.
+#[derive(Debug, Default)]
+pub struct Received {
+    pub files: Vec<PathBuf>,
+    pub texts: Vec<String>,
+    pub bytes: u64,
+}
+
+pub struct Server {
+    pub listener: TcpListener,
+    pub port: u16,
+    cfg: Arc<Config>,
+    clip: ClipMode,
+    clip_lock: Arc<Mutex<()>>,
+}
+
+impl Server {
+    /// Binds TCP and starts the UDP discovery responder. `port` 0 picks any free port.
+    pub fn bind(cfg: Arc<Config>, opts: ServeOpts) -> io::Result<Server> {
+        let listener = TcpListener::bind(("0.0.0.0", opts.port))?;
+        let port = listener.local_addr()?.port();
+        match UdpSocket::bind(("0.0.0.0", UDP_PORT)) {
+            _ if !opts.discovery => {}
+            Ok(sock) => {
+                let cfg = cfg.clone();
+                thread::Builder::new()
+                    .name("discovery".into())
+                    .spawn(move || discovery_loop(sock, &cfg, port))?;
+            }
+            Err(e) => say!("  ! discovery port {UDP_PORT} unavailable ({e}); phones will use the last known address"),
+        }
+        Ok(Server { listener, port, cfg, clip: opts.clip, clip_lock: Arc::new(Mutex::new(())) })
+    }
+
+    pub fn run(self) -> io::Result<()> {
+        for conn in self.listener.incoming() {
+            let stream = match conn {
+                Ok(s) => s,
+                Err(e) => {
+                    say!("  ! accept failed: {e}");
+                    continue;
+                }
+            };
+            let cfg = self.cfg.clone();
+            let clip = self.clip;
+            let lock = self.clip_lock.clone();
+            thread::spawn(move || {
+                let peer = stream.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
+                let t0 = Instant::now();
+                match handle(stream, &cfg) {
+                    Ok(r) => report(&r, &peer, t0, clip, &lock),
+                    // A phone races several connections and closes the ones that lose.
+                    Err(e) if e.kind() == io::ErrorKind::ConnectionAborted => {}
+                    Err(e) => say!("  x from {peer}: {e}"),
+                }
+            });
+        }
+        Ok(())
+    }
+}
+
+fn discovery_loop(sock: UdpSocket, cfg: &Config, port: u16) {
+    let mut buf = [0u8; 64];
+    loop {
+        // Windows reports an ICMP "port unreachable" from an earlier send as a recv error.
+        let Ok((n, from)) = sock.recv_from(&mut buf) else { continue };
+        if n == 28 && &buf[..4] == DISCOVER_MAGIC && buf[4..12] == cfg.id {
+            let _ = sock.send_to(&reply_packet(&cfg.id, &cfg.key, &buf[12..28], port), from);
+        }
+    }
+}
+
+fn report(r: &Received, peer: &str, t0: Instant, clip: ClipMode, lock: &Mutex<()>) {
+    let ms = t0.elapsed().as_millis();
+    if r.files.is_empty() && r.texts.is_empty() {
+        say!("  <- {peer} checked in ({ms} ms) - phone and PC can see each other");
+        return;
+    }
+    for f in &r.files {
+        let size = fs::metadata(f).map(|m| m.len()).unwrap_or(0);
+        say!("  <- {}  {}  ({peer}, {ms} ms)", f.display(), human_size(size));
+    }
+    for t in &r.texts {
+        let preview: String = t.chars().take(60).collect();
+        say!("  <- text: {preview}{}", if t.chars().count() > 60 { "..." } else { "" });
+    }
+    if clip == ClipMode::Off {
+        return;
+    }
+    let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let t1 = Instant::now();
+    let result = if let Some(text) = r.texts.last().filter(|_| r.files.is_empty()) {
+        clipboard::set_text(text)
+    } else if !r.files.is_empty() {
+        clipboard::set_files(&r.files, clip)
+    } else {
+        Ok(())
+    };
+    match result {
+        Ok(()) => say!("     on the clipboard - Ctrl+V to paste ({} ms)", t1.elapsed().as_millis()),
+        Err(e) => say!("  ! clipboard: {e} (the file is saved)"),
+    }
+}
+
+/// Runs one transfer. Partial files are removed if the transfer does not finish.
+pub fn handle(stream: TcpStream, cfg: &Config) -> io::Result<Received> {
+    stream.set_nodelay(true)?;
+    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    let mut w = stream.try_clone()?;
+    let mut r = BufReader::with_capacity(256 * 1024, stream);
+    let (mut rx, mut tx) = server_handshake(&mut r, &mut w, &cfg.key).map_err(|e| {
+        if e.kind() == io::ErrorKind::UnexpectedEof {
+            io::Error::new(io::ErrorKind::ConnectionAborted, "closed before saying hello")
+        } else {
+            e
+        }
+    })?;
+
+    let mut part: Option<(File, PathBuf, String)> = None;
+    let result = receive(&mut r, &mut rx, cfg, &mut part);
+    let mut buf = Vec::new();
+    match result {
+        Ok(got) => {
+            let count = (got.files.len() + got.texts.len()).min(u16::MAX as usize) as u16;
+            tx.write(&mut w, T_OK, &count.to_be_bytes(), &mut buf)?;
+            w.flush()?;
+            Ok(got)
+        }
+        Err(e) => {
+            if let Some((f, p, _)) = part.take() {
+                drop(f);
+                let _ = fs::remove_file(p);
+            }
+            let _ = tx.write(&mut w, T_ERR, e.to_string().as_bytes(), &mut buf);
+            Err(e)
+        }
+    }
+}
+
+fn receive(
+    r: &mut BufReader<TcpStream>,
+    rx: &mut Records,
+    cfg: &Config,
+    part: &mut Option<(File, PathBuf, String)>,
+) -> io::Result<Received> {
+    let mut got = Received::default();
+    let mut buf = Vec::with_capacity(CHUNK + 64);
+    let proto_err = |m: &str| io::Error::new(io::ErrorKind::InvalidData, m.to_string());
+    loop {
+        let Some(typ) = rx.read(r, &mut buf)? else {
+            return Err(proto_err("connection closed before the transfer finished (wrong pairing key, or the phone gave up)"));
+        };
+        let body = &buf[1..];
+        match typ {
+            T_FILE => {
+                if part.is_some() {
+                    return Err(proto_err("new file before the previous one ended"));
+                }
+                let h = parse_file_header(body)?;
+                fs::create_dir_all(&cfg.save_dir)?;
+                let mut name = sanitize_filename(&h.name);
+                if std::path::Path::new(&name).extension().is_none() {
+                    if let Some(ext) = crate::util::ext_for_mime(&h.mime) {
+                        name = format!("{name}.{ext}");
+                    }
+                }
+                let tmp = cfg.save_dir.join(format!(".{name}.{}.part", crate::util::hex(&random::<4>())));
+                *part = Some((File::create(&tmp)?, tmp, name));
+            }
+            T_DATA => {
+                let (f, _, _) = part.as_mut().ok_or_else(|| proto_err("data outside a file"))?;
+                f.write_all(body)?;
+                got.bytes += body.len() as u64;
+            }
+            T_FILE_END => {
+                let (f, tmp, name) = part.take().ok_or_else(|| proto_err("file end outside a file"))?;
+                drop(f);
+                let dest = unique_path(&cfg.save_dir, &name);
+                fs::rename(&tmp, &dest)?;
+                got.files.push(std::path::absolute(&dest).unwrap_or(dest));
+            }
+            T_TEXT => got.texts.push(String::from_utf8_lossy(body).into_owned()),
+            T_END => {
+                if part.is_some() {
+                    return Err(proto_err("transfer ended inside a file"));
+                }
+                return Ok(got);
+            }
+            other => return Err(proto_err(&format!("unknown record type {other:#x}"))),
+        }
+    }
+}
+
+/// For callers that want the bound address (tests, `--port 0`).
+pub fn local_addr(s: &Server) -> SocketAddr {
+    s.listener.local_addr().expect("bound listener has an address")
+}

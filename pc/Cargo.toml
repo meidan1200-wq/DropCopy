@@ -1,0 +1,38 @@
+[package]
+name = "dropcopy"
+version = "0.1.0"
+edition = "2021"
+description = "Phone-to-PC drop: share on the phone, Ctrl+V on the PC. LAN only, no cloud."
+license = "MIT"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "dropcopy"
+path = "src/main.rs"
+
+[dependencies]
+aes-gcm = "0.10"
+hmac = "0.12"
+sha2 = "0.10"
+getrandom = "0.2"
+base64 = "0.22"
+qrcode = { version = "0.14", default-features = false }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_DataExchange",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

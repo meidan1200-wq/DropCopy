@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DropCopy</string>
+    <string name="share_label">DropCopy to PC</string>
+    <string name="tile_label">Send clipboard</string>
+</resources>

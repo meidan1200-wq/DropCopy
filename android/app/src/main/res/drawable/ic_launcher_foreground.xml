@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A phone dropping into a laptop: arrow into a tray. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M50,30h8v22h9l-13,14l-13,-14h9z" />
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M32,62h6v8h32v-8h6v14h-44z" />
+</vector>
