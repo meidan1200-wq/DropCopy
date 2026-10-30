@@ -31,7 +31,11 @@ pub fn log_to(dir: &std::path::Path) {
 pub mod client;
 pub mod clipboard;
 pub mod config;
+pub mod near;
+pub mod phone_art;
+pub mod popup;
 pub mod pair;
 pub mod proto;
 pub mod server;
+pub mod update;
 pub mod util;

@@ -15,6 +15,31 @@ pub struct Config {
     pub save_dir: PathBuf,
     /// Where `dropcopy send` last found a receiver, tried first next time.
     pub last_peer: Option<String>,
+    /// Show the little phone above the taskbar when photos arrive.
+    pub popup: bool,
+    /// Watch Bluetooth for the phone being brought close.
+    pub near: bool,
+    /// Smoothed signal strength (dBm) that counts as "brought close". Higher = closer.
+    pub near_rssi: i16,
+    /// Install new releases automatically (background copy only).
+    pub auto_update: bool,
+}
+
+/// Every setting `dropcopy set` accepts, with its meaning, for the help text.
+pub const SETTINGS: &[(&str, &str)] = &[
+    ("popup", "on|off   the phone above the taskbar when photos arrive"),
+    ("near", "on|off   show the latest photo when the phone is brought close (Bluetooth)"),
+    ("near_rssi", "-30..-90 how close counts as close (default -55; see `dropcopy near`)"),
+    ("auto_update", "on|off   install new versions automatically"),
+    ("name", "TEXT     the name phones see"),
+];
+
+fn on(v: Option<String>, default: bool) -> bool {
+    match v.as_deref().map(str::trim) {
+        Some("off" | "false" | "0" | "no") => false,
+        Some("on" | "true" | "1" | "yes") => true,
+        _ => default,
+    }
 }
 
 fn env_path(var: &str) -> Option<PathBuf> {
@@ -74,6 +99,10 @@ impl Config {
             name: get("name").filter(|s| !s.is_empty()).unwrap_or_else(hostname),
             save_dir: get("save_dir").map(PathBuf::from).unwrap_or_else(default_save_dir),
             last_peer: get("last_peer").filter(|s| !s.is_empty()),
+            popup: on(get("popup"), true),
+            near: on(get("near"), true),
+            near_rssi: get("near_rssi").and_then(|v| v.parse().ok()).filter(|v| (-100..=-20).contains(v)).unwrap_or(-55),
+            auto_update: on(get("auto_update"), true),
             home,
         };
         if created {
@@ -86,18 +115,47 @@ impl Config {
         fs::create_dir_all(&self.home)?;
         let text = format!(
             "# DropCopy settings. Delete this file to unpair every phone.\n\
-             id={}\nkey={}\nname={}\nsave_dir={}\nlast_peer={}\n",
+             id={}\nkey={}\nname={}\nsave_dir={}\nlast_peer={}\n\
+             popup={}\nnear={}\nnear_rssi={}\nauto_update={}\n",
             hex(&self.id),
             b64url(&self.key),
             self.name,
             self.save_dir.display(),
             self.last_peer.as_deref().unwrap_or(""),
+            if self.popup { "on" } else { "off" },
+            if self.near { "on" } else { "off" },
+            self.near_rssi,
+            if self.auto_update { "on" } else { "off" },
         );
         let path = Self::path(&self.home);
         let tmp = path.with_extension("tmp");
         fs::write(&tmp, text)?;
         restrict_permissions(&tmp);
         fs::rename(tmp, path)
+    }
+
+    /// Changes one setting by name (see `SETTINGS`).
+    pub fn set(&mut self, key: &str, value: &str) -> Result<(), String> {
+        let flag = |v: &str| match v {
+            "on" | "true" | "1" | "yes" => Ok(true),
+            "off" | "false" | "0" | "no" => Ok(false),
+            _ => Err(format!("{key} is on or off")),
+        };
+        match key {
+            "popup" => self.popup = flag(value)?,
+            "near" => self.near = flag(value)?,
+            "auto_update" => self.auto_update = flag(value)?,
+            "near_rssi" => {
+                self.near_rssi = value
+                    .parse()
+                    .ok()
+                    .filter(|v: &i16| (-100..=-20).contains(v))
+                    .ok_or("near_rssi is a number from -100 to -20")?
+            }
+            "name" if !value.trim().is_empty() => self.name = value.trim().to_string(),
+            _ => return Err(format!("unknown setting {key}")),
+        }
+        self.save().map_err(|e| e.to_string())
     }
 
     /// Forgets every paired phone by issuing a new id and key.

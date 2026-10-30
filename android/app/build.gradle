@@ -2,6 +2,12 @@ plugins {
     id "com.android.application"
 }
 
+// Set by the release workflow from the tag (v1.2.3 -> 1.2.3 / 10203); local builds use these.
+def appVersionName = (project.findProperty("appVersionName") ?: "0.3.0").toString()
+def appVersionCode = (project.findProperty("appVersionCode") ?: "300").toString().toInteger()
+// The release key comes from the DROPCOPY_KEYSTORE* secrets in CI. Without it, the debug key signs.
+def releaseKeystore = System.getenv("DROPCOPY_KEYSTORE")
+
 android {
     namespace "dev.dropcopy"
     compileSdk 35
@@ -11,8 +17,23 @@ android {
         // Android 10: sharing shortcuts (the PC icon in the share sheet) need it.
         minSdk 29
         targetSdk 35
-        versionCode 1
-        versionName "0.1.0"
+        versionCode appVersionCode
+        versionName appVersionName
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    signingConfigs {
+        release {
+            if (releaseKeystore) {
+                storeFile file(releaseKeystore)
+                storePassword System.getenv("DROPCOPY_KEYSTORE_PASSWORD")
+                keyAlias "dropcopy"
+                keyPassword System.getenv("DROPCOPY_KEYSTORE_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
@@ -20,9 +41,8 @@ android {
             minifyEnabled true
             shrinkResources true
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
-            // Sideloaded personal app: sign with the local debug key so `assembleRelease`
-            // works out of the box. Use your own keystore to publish it.
-            signingConfig signingConfigs.debug
+            // One fixed key, so every update installs over the previous version.
+            signingConfig releaseKeystore ? signingConfigs.release : signingConfigs.debug
         }
     }
 

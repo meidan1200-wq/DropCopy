@@ -183,4 +183,52 @@ public class AppTest {
         for (File f : got) found |= java.util.Arrays.equals(data, Files.readAllBytes(f.toPath()));
         assertTrue("queued file arrived intact", found);
     }
+
+    @Test
+    public void proximityTokenMatchesThePcSide() {
+        byte[] key = new byte[32];
+        java.util.Arrays.fill(key, (byte) 7);
+        StringBuilder hex = new StringBuilder();
+        for (byte b : Proto.nearToken(key, 29_000_000L)) hex.append(String.format("%02x", b & 0xff));
+        assertEquals("c2a8ab18665b2517", hex.toString()); // same vector as pc/src/near.rs
+        byte[] p = Proto.nearPayload(key, 29_000_000L);
+        assertEquals(10, p.length);
+        assertEquals('D', p[0]);
+        assertEquals('C', p[1]);
+    }
+
+    @Test
+    public void updaterComparesVersionsAndReadsReleases() throws Exception {
+        assertTrue(Updater.isNewer("v0.3.1", "0.3.0"));
+        assertTrue(Updater.isNewer("1.0.0", "0.99.9"));
+        assertTrue(!Updater.isNewer("0.3.0", "0.3.0"));
+        assertTrue(!Updater.isNewer("0.2.9", "0.3.0"));
+        assertTrue(!Updater.isNewer("garbage", "0.3.0"));
+        String json = "{\"tag_name\":\"v0.4.0\",\"body\":\"notes\",\"assets\":["
+                + "{\"name\":\"dropcopy.exe\",\"browser_download_url\":\"https://x/exe\"},"
+                + "{\"name\":\"DropCopy.apk\",\"browser_download_url\":\"https://x/apk\",\"digest\":\"sha256:" + "ab".repeat(32) + "\"}]}";
+        Updater.Release r = Updater.parse(json);
+        assertEquals("0.4.0", r.version);
+        assertEquals("https://x/apk", r.url);
+        assertEquals(32, r.sha256.length);
+        assertEquals((byte) 0xab, r.sha256[0]);
+        assertEquals(null, Updater.parse("{\"tag_name\":\"v1.0.0\",\"assets\":[]}"));
+    }
+
+    @Test
+    public void mainScreenShowsPairedPcAndSwitchesStartTheService() {
+        Store.add(app, LINK);
+        org.robolectric.android.controller.ActivityController<MainActivity> c = Robolectric.buildActivity(MainActivity.class).setup();
+        MainActivity a = c.get();
+        assertEquals("My PC", ((android.widget.TextView) a.findViewById(R.id.pc_name)).getText().toString());
+        assertEquals("Pair another PC", ((android.widget.Button) a.findViewById(R.id.scan)).getText().toString());
+        assertEquals(android.view.View.VISIBLE, a.findViewById(R.id.check).getVisibility());
+        // Tapping the row (not only the switch) turns the setting on and starts the background service.
+        shadowOf(app).grantPermissions(android.Manifest.permission.BLUETOOTH_ADVERTISE);
+        a.findViewById(R.id.row_near).performClick();
+        assertTrue(Store.flag(app, Store.NEAR));
+        Intent svc = shadowOf(app).getNextStartedService();
+        assertNotNull(svc);
+        assertEquals(WatchService.class.getName(), svc.getComponent().getClassName());
+    }
 }

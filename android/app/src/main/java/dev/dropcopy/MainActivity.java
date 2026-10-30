@@ -4,103 +4,90 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.graphics.Typeface;
+import android.content.res.ColorStateList;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.text.InputType;
+import android.os.PowerManager;
+import android.provider.Settings;
 import android.view.View;
 import android.widget.Button;
-import android.widget.CompoundButton;
 import android.widget.EditText;
-import android.widget.LinearLayout;
-import android.widget.ScrollView;
+import android.widget.ImageView;
 import android.widget.Switch;
 import android.widget.TextView;
 import com.google.mlkit.vision.barcode.common.Barcode;
-import com.google.mlkit.vision.codescanner.GmsBarcodeScanner;
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions;
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning;
 import java.util.ArrayList;
 import java.util.List;
 
-/** Setup only: pair with a PC, test the connection, toggle auto-send. Sending never opens this. */
+/** Setup only: pair with a PC, check it, choose what happens automatically. Sending never opens this. */
 public class MainActivity extends Activity {
-    private TextView status;
-    private Switch shots, camera;
+    private TextView pcName, pcDetail, statusMessage;
+    private ImageView dot;
+    private Button scan, check;
+    private Switch shots, camera, near, updates;
+    private View batteryRow, updateCard;
+    private Updater.Release pendingUpdate;
+    private boolean checking;
 
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
-        int pad = (int) (20 * getResources().getDisplayMetrics().density);
-        LinearLayout col = new LinearLayout(this);
-        col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding(pad, pad, pad, pad);
+        setContentView(R.layout.activity_main);
+        pcName = findViewById(R.id.pc_name);
+        pcDetail = findViewById(R.id.pc_detail);
+        statusMessage = findViewById(R.id.status_message);
+        dot = findViewById(R.id.status_dot);
+        scan = findViewById(R.id.scan);
+        check = findViewById(R.id.check);
+        shots = findViewById(R.id.sw_shots);
+        camera = findViewById(R.id.sw_camera);
+        near = findViewById(R.id.sw_near);
+        updates = findViewById(R.id.sw_updates);
+        batteryRow = findViewById(R.id.row_battery);
+        updateCard = findViewById(R.id.update_card);
+        ((TextView) findViewById(R.id.version)).setText("v" + BuildConfig.VERSION_NAME);
 
-        TextView title = new TextView(this);
-        title.setText("DropCopy");
-        title.setTextSize(28);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        col.addView(title);
-
-        status = new TextView(this);
-        status.setTextSize(16);
-        status.setPadding(0, pad / 2, 0, pad);
-        col.addView(status);
-
-        col.addView(button("Scan pairing code", v -> scan()));
-        EditText link = new EditText(this);
-        link.setHint("…or paste the pairing link");
-        link.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        link.setSingleLine(true);
-        col.addView(link);
-        col.addView(button("Pair with pasted link", v -> pair(link.getText().toString())));
-        col.addView(button("Check connection", v -> check()));
-
-        shots = new Switch(this);
-        shots.setText("Auto-send new screenshots");
-        shots.setPadding(0, pad, 0, pad / 2);
-        col.addView(shots);
-        camera = new Switch(this);
-        camera.setText("Auto-send new camera photos");
-        camera.setPadding(0, pad / 2, 0, pad);
-        col.addView(camera);
-
-        TextView help = new TextView(this);
-        help.setText("How to send\n"
-                + "• Share → DropCopy, or tap your PC's own icon in the share sheet's top row.\n"
-                + "• Clipboard: add the \"Send clipboard\" tile to Quick Settings and tap it after copying.\n"
-                + "• Zero taps: turn on auto-send above, then just take a screenshot.\n\n"
-                + "On the PC, run dropcopy. Files land in Pictures\\DropCopy and on the clipboard: press Ctrl+V.\n"
-                + "Phone and PC must be on the same Wi-Fi (or the PC on the phone's hotspot). Nothing leaves your network.");
-        help.setPadding(0, 0, 0, pad);
-        col.addView(help);
-
-        col.addView(button("Forget paired PCs", v -> {
+        scan.setOnClickListener(v -> scan());
+        check.setOnClickListener(v -> check());
+        View pasteRow = findViewById(R.id.paste_row);
+        findViewById(R.id.paste_toggle).setOnClickListener(v -> pasteRow.setVisibility(pasteRow.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
+        EditText link = findViewById(R.id.link);
+        findViewById(R.id.pair).setOnClickListener(v -> pair(link.getText().toString()));
+        findViewById(R.id.battery_allow).setOnClickListener(v -> askBatteryExemption());
+        findViewById(R.id.update_install).setOnClickListener(v -> installUpdate());
+        findViewById(R.id.forget).setOnClickListener(v -> {
             Store.forgetAll(this);
-            Store.setFlag(this, Store.WATCH_SCREENSHOTS, false);
-            Store.setFlag(this, Store.WATCH_CAMERA, false);
+            for (String k : new String[]{Store.WATCH_SCREENSHOTS, Store.WATCH_CAMERA, Store.NEAR}) Store.setFlag(this, k, false);
+            shots.setChecked(false);
+            camera.setChecked(false);
+            near.setChecked(false);
             WatchService.sync(this);
             refresh();
-        }));
+        });
 
-        ScrollView scroll = new ScrollView(this);
-        scroll.addView(col);
-        scroll.setFitsSystemWindows(true);
-        setContentView(scroll);
-
-        CompoundButton.OnCheckedChangeListener onToggle = (b, on) -> {
-            Store.setFlag(this, b == shots ? Store.WATCH_SCREENSHOTS : Store.WATCH_CAMERA, on);
-            if (on) requestPermissionsIfNeeded();
-            WatchService.sync(this);
-        };
-        shots.setChecked(Store.flag(this, Store.WATCH_SCREENSHOTS));
-        camera.setChecked(Store.flag(this, Store.WATCH_CAMERA));
-        shots.setOnCheckedChangeListener(onToggle);
-        camera.setOnCheckedChangeListener(onToggle);
+        bind(R.id.row_shots, shots, Store.WATCH_SCREENSHOTS);
+        bind(R.id.row_camera, camera, Store.WATCH_CAMERA);
+        bind(R.id.row_near, near, Store.NEAR);
+        updates.setChecked(Store.autoUpdate(this));
+        findViewById(R.id.row_updates).setOnClickListener(v -> updates.toggle());
+        updates.setOnCheckedChangeListener((b, on) -> {
+            Store.setFlag(this, Store.AUTO_UPDATE, on);
+            Updater.schedule(this);
+        });
 
         handle(getIntent());
         refresh();
+        Updater.schedule(this);
+        checkForUpdate();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        refresh(); // e.g. back from the battery or permission settings
     }
 
     @Override
@@ -109,71 +96,159 @@ public class MainActivity extends Activity {
         handle(intent);
     }
 
+    /** A switch row: the whole row toggles, and the setting starts or stops the background service. */
+    private void bind(int rowId, Switch sw, String key) {
+        sw.setChecked(Store.flag(this, key));
+        findViewById(rowId).setOnClickListener(v -> sw.toggle());
+        sw.setOnCheckedChangeListener((b, on) -> {
+            Store.setFlag(this, key, on);
+            if (on) requestPermissionsIfNeeded();
+            WatchService.sync(this);
+            refresh();
+        });
+    }
+
     private void handle(Intent intent) {
         Uri data = intent == null ? null : intent.getData();
         if (data != null && "dropcopy".equals(data.getScheme())) pair(data.toString());
     }
 
-    private Button button(String text, View.OnClickListener l) {
-        Button b = new Button(this);
-        b.setText(text);
-        b.setAllCaps(false);
-        b.setOnClickListener(l);
-        return b;
+    private void setDot(int colorRes) {
+        dot.setImageTintList(ColorStateList.valueOf(getColor(colorRes)));
     }
 
     private void refresh() {
         List<Proto.Pc> pcs = Store.pcs(this);
-        if (pcs.isEmpty()) {
-            status.setText("Not paired yet.\nRun dropcopy on your PC and scan the code it shows.");
-            return;
+        boolean paired = !pcs.isEmpty();
+        check.setVisibility(paired ? View.VISIBLE : View.GONE);
+        scan.setText(paired ? "Pair another PC" : "Scan pairing code");
+        if (!checking) {
+            if (paired) {
+                Proto.Pc pc = pcs.get(0);
+                pcName.setText(pcs.size() == 1 ? pc.name : pc.name + "  +" + (pcs.size() - 1));
+                pcDetail.setText(pc.host != null ? "Last seen at " + pc.host : "Not reached yet");
+            } else {
+                pcName.setText("Not paired yet");
+                pcDetail.setText("Run dropcopy on your PC, then scan the code it shows");
+                statusMessage.setVisibility(View.GONE);
+            }
+            setDot(R.color.idle);
         }
-        StringBuilder sb = new StringBuilder("Paired with:");
-        for (Proto.Pc pc : pcs) {
-            sb.append("\n• ").append(pc.name);
-            if (pc.host != null) sb.append("  (last seen at ").append(pc.host).append(')');
-        }
-        status.setText(sb);
+        boolean background = shots.isChecked() || camera.isChecked() || near.isChecked();
+        PowerManager pm = getSystemService(PowerManager.class);
+        boolean exempt = pm == null || pm.isIgnoringBatteryOptimizations(getPackageName());
+        batteryRow.setVisibility(background && !exempt ? View.VISIBLE : View.GONE);
+    }
+
+    private void showStatus(boolean ok, String title, String detail) {
+        setDot(ok ? R.color.ok : R.color.warn);
+        pcDetail.setText(title);
+        statusMessage.setVisibility(detail == null ? View.GONE : View.VISIBLE);
+        statusMessage.setText(detail);
     }
 
     private void scan() {
-        GmsBarcodeScannerOptions opts = new GmsBarcodeScannerOptions.Builder()
-                .setBarcodeFormats(Barcode.FORMAT_QR_CODE).build();
-        GmsBarcodeScanner scanner = GmsBarcodeScanning.getClient(this, opts);
-        scanner.startScan()
+        GmsBarcodeScanning.getClient(this, new GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build())
+                .startScan()
                 .addOnSuccessListener(b -> pair(b.getRawValue()))
-                .addOnFailureListener(e -> Transfer.toast(this, "Scanner unavailable - paste the link instead"));
+                .addOnFailureListener(e -> {
+                    findViewById(R.id.paste_row).setVisibility(View.VISIBLE);
+                    Transfer.toast(this, "Scanner unavailable here - paste the link the PC shows");
+                });
     }
 
     private void pair(String link) {
         try {
             Proto.Pc pc = Store.add(this, link);
-            Transfer.toast(this, "Paired with " + pc.name + ". Checking…");
+            findViewById(R.id.paste_row).setVisibility(View.GONE);
             refresh();
             requestPermissionsIfNeeded();
+            Transfer.toast(this, "Paired with " + pc.name);
             check();
         } catch (IllegalArgumentException e) {
-            Transfer.toast(this, "That is not a DropCopy pairing code: " + e.getMessage());
+            Transfer.toast(this, "That isn't a DropCopy pairing code");
         }
     }
 
     /** An empty transfer: proves discovery, the key and the PC's firewall without touching its clipboard. */
     private void check() {
-        status.setText("Looking for your PC…");
+        if (Store.pcs(this).isEmpty() || checking) return;
+        checking = true;
+        setDot(R.color.idle);
+        pcDetail.setText("Looking for your PC…");
+        statusMessage.setVisibility(View.GONE);
         new Thread(() -> {
-            String msg;
+            long ms = -1;
+            String err = null;
             try {
-                msg = "✓ " + Transfer.run(this, null, null, null, null);
+                long t0 = System.currentTimeMillis();
+                Transfer.run(this, null, null, null, null);
+                ms = System.currentTimeMillis() - t0;
             } catch (Exception e) {
-                msg = "✗ " + e.getMessage() + "\nIs dropcopy running on the PC, on the same Wi-Fi? "
-                        + "On Windows, allow it through the firewall on private networks.";
+                err = e.getMessage();
             }
-            String m = msg;
+            long fMs = ms;
+            String fErr = err;
             runOnUiThread(() -> {
+                checking = false;
                 refresh();
-                status.append("\n\n" + m);
+                if (fErr == null) {
+                    showStatus(true, "Connected · " + fMs + " ms", null);
+                } else {
+                    showStatus(false, "Can't reach the PC",
+                            "Is dropcopy running on it, on the same Wi-Fi? On Windows, allow it through the firewall.");
+                }
             });
         }).start();
+    }
+
+    private void checkForUpdate() {
+        new Thread(() -> {
+            try {
+                Updater.Release r = Updater.check();
+                if (r == null) return;
+                runOnUiThread(() -> {
+                    pendingUpdate = r;
+                    ((TextView) findViewById(R.id.update_title)).setText("Update available: v" + r.version);
+                    TextView notes = findViewById(R.id.update_notes);
+                    String n = r.notes == null ? "" : r.notes.replaceAll("[*`#]", "").trim();
+                    notes.setText(n.isEmpty() ? "A newer version of DropCopy is ready." : n);
+                    updateCard.setVisibility(View.VISIBLE);
+                });
+            } catch (Exception ignored) {
+                // Offline: nothing to show.
+            }
+        }).start();
+    }
+
+    private void installUpdate() {
+        Updater.Release r = pendingUpdate;
+        if (r == null) return;
+        if (!getPackageManager().canRequestPackageInstalls()) {
+            Transfer.toast(this, "Allow DropCopy to install updates, then tap Install again");
+            startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName())));
+            return;
+        }
+        Button b = findViewById(R.id.update_install);
+        b.setEnabled(false);
+        b.setText("Downloading…");
+        new Thread(() -> {
+            try {
+                Updater.install(this, Updater.download(this, r));
+                runOnUiThread(() -> b.setText("Installing…"));
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    b.setEnabled(true);
+                    b.setText("Try again");
+                    Transfer.toast(this, "Update failed: " + e.getMessage());
+                });
+            }
+        }).start();
+    }
+
+    @android.annotation.SuppressLint("BatteryLife") // the user turned on background work; this keeps it alive
+    private void askBatteryExemption() {
+        startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + getPackageName())));
     }
 
     private void requestPermissionsIfNeeded() {
@@ -184,15 +259,18 @@ public class MainActivity extends Activity {
         if ((shots.isChecked() || camera.isChecked()) && checkSelfPermission(WatchService.mediaPermission()) != PackageManager.PERMISSION_GRANTED) {
             want.add(WatchService.mediaPermission());
         }
+        if (near.isChecked() && Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED) {
+            want.add(Manifest.permission.BLUETOOTH_ADVERTISE);
+        }
         if (!want.isEmpty()) requestPermissions(want.toArray(new String[0]), 1);
     }
 
     @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
         WatchService.sync(this);
-        if ((shots.isChecked() || camera.isChecked())
-                && checkSelfPermission(WatchService.mediaPermission()) != PackageManager.PERMISSION_GRANTED) {
-            Transfer.toast(this, "Auto-send needs access to all photos");
+        if ((shots.isChecked() || camera.isChecked()) && checkSelfPermission(WatchService.mediaPermission()) != PackageManager.PERMISSION_GRANTED) {
+            Transfer.toast(this, "Sending new screenshots needs access to all photos");
         }
+        refresh();
     }
 }

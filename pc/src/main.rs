@@ -25,6 +25,11 @@ USAGE
   dropcopy name [NAME]          show or change the name phones see
   dropcopy setup                Windows: run in the background, start with Windows
   dropcopy unsetup              stop it and undo setup
+  dropcopy set [SETTING VALUE]  popup, proximity, updates (run alone to list them)
+  dropcopy near                 live Bluetooth readings, to tune how close counts as close
+  dropcopy update               install the newest version now
+  dropcopy doctor               check network, drag and drop, updates
+  dropcopy version
 
 OPTIONS
   --clip both|image|file|off    what goes on the clipboard (default: both)
@@ -145,6 +150,27 @@ fn run(a: Args) -> Result<(), String> {
             Ok(())
         }
         Some("setup") => setup::install(),
+        Some("update") => update_now(),
+        Some("near") => near_diagnostic(&cfg),
+        Some("doctor") => doctor(&cfg),
+        Some("version") | Some("--version") => {
+            say!("dropcopy {}", dropcopy::update::current());
+            Ok(())
+        }
+        Some("set") => match a.rest.as_slice() {
+            [k, v @ ..] if !v.is_empty() => {
+                cfg.set(k, &v.join(" "))?;
+                say!("  {k} = {}  (restart DropCopy to apply: dropcopy setup)", v.join(" "));
+                Ok(())
+            }
+            _ => {
+                say!("  dropcopy set SETTING VALUE\n");
+                for (k, d) in dropcopy::config::SETTINGS {
+                    say!("  {k:<12} {d}");
+                }
+                Ok(())
+            }
+        },
         Some("unsetup") => setup::uninstall(),
         Some(other) => Err(format!("unknown command {other} (try --help)")),
     }
@@ -158,7 +184,20 @@ fn serve(cfg: Config, first_run: bool, a: &Args) -> Result<(), String> {
         dropcopy::log_to(&cfg.home);
     }
     let cfg = Arc::new(cfg);
-    let server = Server::bind(cfg.clone(), ServeOpts { port: a.port, clip: a.clip, discovery: true }).map_err(|e| {
+    dropcopy::update::cleanup();
+    let opts = || ServeOpts { port: a.port, clip: a.clip, discovery: true, popup: cfg.popup };
+    let mut bound = Server::bind(cfg.clone(), opts());
+    // Just restarted by an update: the old copy may still be letting go of the port.
+    for _ in 0..40 {
+        match &bound {
+            Err(e) if a.background && e.kind() == std::io::ErrorKind::AddrInUse => {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                bound = Server::bind(cfg.clone(), opts());
+            }
+            _ => break,
+        }
+    }
+    let server = bound.map_err(|e| {
         if e.kind() == std::io::ErrorKind::AddrInUse {
             format!("port {} is in use - DropCopy is probably already running", a.port)
         } else {
@@ -174,7 +213,104 @@ fn serve(cfg: Config, first_run: bool, a: &Args) -> Result<(), String> {
     }
     say!("  Waiting for your phone... (Ctrl+C to stop)\n");
     setup::warn_if_public_network();
+    if cfg.near && cfg.popup {
+        dropcopy::near::watch(cfg.key, cfg.near_rssi, |r| {
+            if r.came_near {
+                say!("  phone nearby ({:.0} dBm)", r.smoothed);
+                if let Some(files) = dropcopy::popup::latest() {
+                    dropcopy::popup::show(files, "Nearby");
+                }
+            }
+        });
+    }
+    start_updater(a.background && cfg.auto_update);
     server.run().map_err(|e| e.to_string())
+}
+
+/// The background copy installs new releases by itself; an interactive window just mentions them.
+fn start_updater(install: bool) {
+    use dropcopy::update;
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(if install { 45 } else { 5 }));
+        loop {
+            match update::check() {
+                Ok(Some(rel)) if install => match std::env::current_exe().map_err(|e| e.to_string()).and_then(|exe| update::apply(&exe, &rel).map(|v| (exe, v))) {
+                    Ok((exe, v)) => {
+                        say!("  updated to v{v}; restarting");
+                        if setup::restart(&exe) {
+                            std::process::exit(0);
+                        }
+                    }
+                    Err(e) => say!("  ! update to v{} failed: {e}", rel.version),
+                },
+                Ok(Some(rel)) => {
+                    say!("  A new version is available: v{} (you have v{}). Run `dropcopy update`.", rel.version, update::current());
+                    return;
+                }
+                _ => {}
+            }
+            if !install {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_secs(6 * 3600));
+        }
+    });
+}
+
+fn update_now() -> Result<(), String> {
+    use dropcopy::update;
+    let Some(rel) = update::check()? else {
+        say!("  DropCopy v{} is up to date.", update::current());
+        return Ok(());
+    };
+    say!("  Downloading v{}...", rel.version);
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let v = update::apply(&exe, &rel)?;
+    say!("  Updated to v{v}.");
+    setup::refresh_background(&exe);
+    Ok(())
+}
+
+/// Checks the pieces a first run depends on and says plainly what is wrong.
+fn doctor(cfg: &Config) -> Result<(), String> {
+    let ok = |b: bool| if b { "ok " } else { "!! " };
+    say!("  DropCopy v{}  ({})", dropcopy::update::current(), std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default());
+    let ip = dropcopy::pair::primary_ipv4();
+    say!("  {} network: {}", ok(ip.is_some()), ip.map(|i| i.to_string()).unwrap_or("no network right now".into()));
+    let port_free = std::net::TcpListener::bind(("0.0.0.0", dropcopy::proto::TCP_PORT)).is_ok();
+    say!("  {} receiver: {}", "   ", if port_free { "not running" } else { "running (port in use)" });
+    std::fs::create_dir_all(&cfg.save_dir).map_err(|e| e.to_string())?;
+    let probe = cfg.save_dir.join(".dropcopy-doctor.png");
+    image::RgbaImage::from_pixel(4, 8, image::Rgba([40, 80, 160, 255])).save(&probe).map_err(|e| e.to_string())?;
+    match dropcopy::popup::check_drag_data(&[probe.clone()]) {
+        Ok(n) => say!("  {} drag and drop: a drop would deliver {n} file", ok(n == 1)),
+        Err(e) => say!("  !!  drag and drop: {e}"),
+    }
+    let _ = std::fs::remove_file(probe);
+    say!("  {} popup: {}   proximity: {} (close at {} dBm)   auto-update: {}", "   ",
+        if cfg.popup { "on" } else { "off" }, if cfg.near { "on" } else { "off" }, cfg.near_rssi, if cfg.auto_update { "on" } else { "off" });
+    match dropcopy::update::check() {
+        Ok(Some(r)) => say!("  {} updates: v{} available (dropcopy update)", "   ", r.version),
+        Ok(None) => say!("  ok  updates: up to date"),
+        Err(e) => say!("  !!  updates: {e}"),
+    }
+    Ok(())
+}
+
+/// Live Bluetooth readings, to see how strong "close" is on this PC.
+fn near_diagnostic(cfg: &Config) -> Result<(), String> {
+    if !cfg!(windows) {
+        return Err("Bluetooth proximity is only available on Windows".into());
+    }
+    say!("  Watching for your phone over Bluetooth (turn on \"Show on PC when near\" in the app).");
+    say!("  Move it towards the laptop and away. It counts as close at {} dBm. Ctrl+C to stop.\n", cfg.near_rssi);
+    dropcopy::near::watch(cfg.key, cfg.near_rssi, |r| {
+        let bar = "#".repeat(((r.smoothed + 100.0).max(0.0) / 2.0) as usize);
+        say!("  {:>4} dBm  smoothed {:>6.1}  {bar}{}", r.rssi, r.smoothed, if r.came_near { "  <- close" } else { "" });
+    });
+    loop {
+        std::thread::sleep(std::time::Duration::from_secs(3600));
+    }
 }
 
 fn send(cfg: &mut Config, a: &Args) -> Result<(), String> {
@@ -313,6 +449,29 @@ mod setup {
         });
     }
 
+    /// Starts the freshly updated copy; it waits for this one to release the port.
+    pub fn restart(exe: &std::path::Path) -> bool {
+        spawn_hidden(&exe.display().to_string(), &["--background".to_string()])
+    }
+
+    /// After `dropcopy update`: bring the installed background copy to the same version.
+    pub fn refresh_background(updated: &std::path::Path) {
+        let Some(installed) = installed_exe() else { return };
+        if !installed.exists() {
+            return;
+        }
+        stop_background();
+        if installed != updated {
+            let tmp = installed.with_file_name("dropcopy.new.exe");
+            if std::fs::copy(updated, &tmp).is_err() || dropcopy::update::swap(&installed, &tmp).is_err() {
+                say!("  ! could not update the background copy at {}", installed.display());
+            }
+        }
+        if spawn_hidden(&installed.display().to_string(), &["--background".to_string()]) {
+            say!("  Background copy restarted.");
+        }
+    }
+
     pub fn uninstall() -> Result<(), String> {
         stop_background();
         quiet(Command::new("reg").args(["delete", RUN_KEY, "/v", "DropCopy", "/f"]));
@@ -334,6 +493,12 @@ mod setup {
     }
 
     pub fn warn_if_public_network() {}
+
+    pub fn restart(exe: &std::path::Path) -> bool {
+        std::process::Command::new(exe).arg("--background").spawn().is_ok()
+    }
+
+    pub fn refresh_background(_: &std::path::Path) {}
 
     pub fn install() -> Result<(), String> {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;

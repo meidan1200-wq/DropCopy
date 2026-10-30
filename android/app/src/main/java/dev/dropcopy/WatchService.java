@@ -2,6 +2,16 @@ package dev.dropcopy;
 
 import android.Manifest;
 import android.app.Service;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothManager;
+import android.bluetooth.le.AdvertiseData;
+import android.bluetooth.le.AdvertisingSet;
+import android.bluetooth.le.AdvertisingSetCallback;
+import android.bluetooth.le.AdvertisingSetParameters;
+import android.bluetooth.le.BluetoothLeAdvertiser;
+import android.content.BroadcastReceiver;
+import android.content.IntentFilter;
+import android.os.PowerManager;
 import android.content.ContentUris;
 import android.content.Context;
 import android.content.Intent;
@@ -39,11 +49,20 @@ public class WatchService extends Service {
         return Build.VERSION.SDK_INT >= 33 ? Manifest.permission.READ_MEDIA_IMAGES : Manifest.permission.READ_EXTERNAL_STORAGE;
     }
 
-    /** Starts or stops the watcher to match the settings. */
+    static boolean wantsMedia(Context c) {
+        return (Store.flag(c, Store.WATCH_SCREENSHOTS) || Store.flag(c, Store.WATCH_CAMERA))
+                && c.checkSelfPermission(mediaPermission()) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    static boolean wantsNear(Context c) {
+        return Store.flag(c, Store.NEAR)
+                && (Build.VERSION.SDK_INT < 31
+                    || c.checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED);
+    }
+
+    /** Starts or stops the background service to match the settings. */
     static void sync(Context c) {
-        boolean want = (Store.flag(c, Store.WATCH_SCREENSHOTS) || Store.flag(c, Store.WATCH_CAMERA))
-                && c.checkSelfPermission(mediaPermission()) == PackageManager.PERMISSION_GRANTED
-                && !Store.pcs(c).isEmpty();
+        boolean want = (wantsMedia(c) || wantsNear(c)) && !Store.pcs(c).isEmpty();
         Intent i = new Intent(c, WatchService.class);
         if (want) {
             try { c.startForegroundService(i); } catch (RuntimeException ignored) { }
@@ -56,9 +75,12 @@ public class WatchService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        startForeground(2, SendService.notification(this, CHANNEL, "Auto-sending new screenshots to your PC")
-                .setContentText("Turn off in DropCopy").build());
-        if (observer == null) {
+        boolean media = wantsMedia(this), near = wantsNear(this);
+        String what = media && near ? "Sending new screenshots · visible to your PC when near"
+                : media ? "Sending new screenshots to your PC" : "Your PC will see the phone when it's near";
+        startForeground(2, SendService.notification(this, CHANNEL, what).setContentText("Change in DropCopy").build());
+        if (near) startNearWatch(); else stopNearWatch();
+        if (media && observer == null) {
             sinceSeconds = System.currentTimeMillis() / 1000 - 2;
             thread = new HandlerThread("watch");
             thread.start();
@@ -108,8 +130,107 @@ public class WatchService extends Service {
         }
     }
 
+    // ---- "bring the phone close" -------------------------------------------------------------
+
+    private AdvertisingSet adSet;
+    private boolean advertising;
+    private BroadcastReceiver nearEvents;
+    private Handler main;
+    private final Runnable rotate = new Runnable() {
+        @Override
+        public void run() {
+            if (adSet != null) {
+                try { adSet.setAdvertisingData(nearData()); } catch (SecurityException ignored) { }
+            }
+            main.postDelayed(this, msToNextMinute());
+        }
+    };
+
+    private final AdvertisingSetCallback adCallback = new AdvertisingSetCallback() {
+        @Override
+        public void onAdvertisingSetStarted(AdvertisingSet set, int txPower, int status) {
+            adSet = status == ADVERTISE_SUCCESS ? set : null;
+        }
+
+        @Override
+        public void onAdvertisingSetStopped(AdvertisingSet set) {
+            adSet = null;
+        }
+    };
+
+    private static long msToNextMinute() {
+        return 60_000 - System.currentTimeMillis() % 60_000 + 50;
+    }
+
+    private AdvertiseData nearData() {
+        java.util.List<Proto.Pc> pcs = Store.pcs(this);
+        byte[] key = pcs.isEmpty() ? new byte[32] : pcs.get(0).key;
+        return new AdvertiseData.Builder()
+                .addManufacturerData(Proto.NEAR_COMPANY_ID, Proto.nearPayload(key, System.currentTimeMillis() / 60_000))
+                .build();
+    }
+
+    /** Advertises only while the screen is on: that is when the phone is in a hand. */
+    private void startNearWatch() {
+        if (nearEvents != null) return;
+        main = new Handler(android.os.Looper.getMainLooper());
+        nearEvents = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context c, Intent i) {
+                updateAdvertising();
+            }
+        };
+        IntentFilter f = new IntentFilter();
+        f.addAction(Intent.ACTION_SCREEN_ON);
+        f.addAction(Intent.ACTION_SCREEN_OFF);
+        f.addAction(BluetoothAdapter.ACTION_STATE_CHANGED);
+        registerReceiver(nearEvents, f);
+        updateAdvertising();
+    }
+
+    private void stopNearWatch() {
+        if (nearEvents == null) return;
+        unregisterReceiver(nearEvents);
+        nearEvents = null;
+        setAdvertising(false);
+    }
+
+    private void updateAdvertising() {
+        PowerManager pm = getSystemService(PowerManager.class);
+        setAdvertising(pm != null && pm.isInteractive());
+    }
+
+    private void setAdvertising(boolean on) {
+        BluetoothManager bm = getSystemService(BluetoothManager.class);
+        BluetoothAdapter adapter = bm == null ? null : bm.getAdapter();
+        BluetoothLeAdvertiser adv = adapter != null && adapter.isEnabled() ? adapter.getBluetoothLeAdvertiser() : null;
+        try {
+            if (on && adv != null && !advertising) {
+                AdvertisingSetParameters p = new AdvertisingSetParameters.Builder()
+                        .setLegacyMode(true)
+                        .setConnectable(false)
+                        .setScannable(false)
+                        .setInterval(AdvertisingSetParameters.INTERVAL_MEDIUM) // ~4 per second
+                        .setTxPowerLevel(AdvertisingSetParameters.TX_POWER_MEDIUM)
+                        .build();
+                adv.startAdvertisingSet(p, nearData(), null, null, null, adCallback);
+                advertising = true;
+                main.removeCallbacks(rotate);
+                main.postDelayed(rotate, msToNextMinute());
+            } else if ((!on || adv == null) && advertising) {
+                if (adv != null) adv.stopAdvertisingSet(adCallback);
+                advertising = false;
+                adSet = null;
+                main.removeCallbacks(rotate);
+            }
+        } catch (SecurityException | IllegalStateException e) {
+            advertising = false; // permission revoked or Bluetooth went away
+        }
+    }
+
     @Override
     public void onDestroy() {
+        stopNearWatch();
         if (observer != null) getContentResolver().unregisterContentObserver(observer);
         if (thread != null) thread.quitSafely();
         exec.shutdown();

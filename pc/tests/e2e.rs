@@ -20,7 +20,7 @@ fn temp(name: &str) -> PathBuf {
     d
 }
 
-fn config(dir: &PathBuf) -> Config {
+fn config(dir: &std::path::Path) -> Config {
     let (mut cfg, created) = Config::load_or_create(dir.join("home")).unwrap();
     assert!(created);
     cfg.save_dir = dir.join("received");
@@ -34,7 +34,7 @@ fn files_and_text_arrive_intact() {
     let key = cfg.key;
     let id = cfg.id;
     let save_dir = cfg.save_dir.clone();
-    let server = Server::bind(Arc::new(cfg), ServeOpts { port: 0, clip: ClipMode::Off, discovery: false }).unwrap();
+    let server = Server::bind(Arc::new(cfg), ServeOpts { port: 0, clip: ClipMode::Off, discovery: false, popup: false }).unwrap();
     let addr = local_addr(&server);
     std::thread::spawn(move || server.run());
 
@@ -72,7 +72,7 @@ fn wrong_key_is_refused_and_leaves_nothing() {
     let dir = temp("wrongkey");
     let cfg = config(&dir);
     let save_dir = cfg.save_dir.clone();
-    let server = Server::bind(Arc::new(cfg), ServeOpts { port: 0, clip: ClipMode::Off, discovery: false }).unwrap();
+    let server = Server::bind(Arc::new(cfg), ServeOpts { port: 0, clip: ClipMode::Off, discovery: false, popup: false }).unwrap();
     let addr = local_addr(&server);
     std::thread::spawn(move || server.run());
 
@@ -118,7 +118,7 @@ fn discovery_finds_the_receiver() {
     }
     let dir = temp("discover");
     let cfg = config(&dir);
-    let server = match Server::bind(Arc::new(cfg), ServeOpts { port: 0, clip: ClipMode::Off, discovery: true }) {
+    let server = match Server::bind(Arc::new(cfg), ServeOpts { port: 0, clip: ClipMode::Off, discovery: true, popup: false }) {
         Ok(s) => s,
         Err(_) => return,
     };

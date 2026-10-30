@@ -167,6 +167,22 @@ public final class Proto {
         public long totalMillis;
     }
 
+    // ---- proximity -------------------------------------------------------------------------
+
+    /** Bluetooth LE manufacturer id 0xFFFF (reserved for testing) carries "DC" | token. */
+    public static final int NEAR_COMPANY_ID = 0xFFFF;
+    static final byte[] L_NEAR = ascii("dropcopy/v1/near");
+
+    /** Changes every minute, so the advertisement means something only to the paired PC. */
+    public static byte[] nearToken(byte[] key, long minute) {
+        byte[] m = ByteBuffer.allocate(8).putLong(minute).array();
+        return slice(hmac(key, L_NEAR, m), 0, 8);
+    }
+
+    public static byte[] nearPayload(byte[] key, long minute) {
+        return ByteBuffer.allocate(10).put((byte) 'D').put((byte) 'C').put(nearToken(key, minute)).array();
+    }
+
     // ---- crypto --------------------------------------------------------------------------
 
     static byte[] hmac(byte[] key, byte[]... parts) {

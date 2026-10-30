@@ -17,6 +17,8 @@ pub struct ServeOpts {
     pub clip: ClipMode,
     /// Answer UDP discovery broadcasts (off only in tests that run side by side).
     pub discovery: bool,
+    /// Show the little phone above the taskbar when photos arrive.
+    pub popup: bool,
 }
 
 /// What one connection delivered.
@@ -33,6 +35,7 @@ pub struct Server {
     cfg: Arc<Config>,
     clip: ClipMode,
     clip_lock: Arc<Mutex<()>>,
+    popup: bool,
 }
 
 impl Server {
@@ -50,7 +53,7 @@ impl Server {
             }
             Err(e) => say!("  ! discovery port {UDP_PORT} unavailable ({e}); phones will use the last known address"),
         }
-        Ok(Server { listener, port, cfg, clip: opts.clip, clip_lock: Arc::new(Mutex::new(())) })
+        Ok(Server { listener, port, cfg, clip: opts.clip, clip_lock: Arc::new(Mutex::new(())), popup: opts.popup })
     }
 
     pub fn run(self) -> io::Result<()> {
@@ -65,11 +68,20 @@ impl Server {
             let cfg = self.cfg.clone();
             let clip = self.clip;
             let lock = self.clip_lock.clone();
+            let popup = self.popup;
             thread::spawn(move || {
                 let peer = stream.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
                 let t0 = Instant::now();
                 match handle(stream, &cfg) {
-                    Ok(r) => report(&r, &peer, t0, clip, &lock),
+                    Ok(r) => {
+                        if !r.files.is_empty() {
+                            crate::popup::remember(&r.files);
+                            if popup {
+                                crate::popup::show(r.files.clone(), "From your phone");
+                            }
+                        }
+                        report(&r, &peer, t0, clip, &lock)
+                    }
                     // A phone races several connections and closes the ones that lose.
                     Err(e) if e.kind() == io::ErrorKind::ConnectionAborted => {}
                     Err(e) => say!("  x from {peer}: {e}"),

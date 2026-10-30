@@ -93,6 +93,12 @@ final class Store {
         prefs(c).edit().putBoolean(key, v).apply();
     }
 
+    static boolean autoUpdate(Context c) {
+        return prefs(c).getBoolean(AUTO_UPDATE, true);
+    }
+
+    static final String AUTO_UPDATE = "auto_update";
+    static final String NEAR = "near";
     static final String WATCH_SCREENSHOTS = "watch_screenshots";
     static final String WATCH_CAMERA = "watch_camera";
 }
