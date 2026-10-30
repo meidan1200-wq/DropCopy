@@ -167,6 +167,7 @@ fn serve(cfg: Config, first_run: bool, a: &Args) -> Result<(), String> {
         say!("  Pair another phone: dropcopy pair");
     }
     say!("  Waiting for your phone... (Ctrl+C to stop)\n");
+    setup::warn_if_public_network();
     server.run().map_err(|e| e.to_string())
 }
 
@@ -255,6 +256,26 @@ mod setup {
         Ok(())
     }
 
+    /// Windows blocks inbound connections on networks marked Public, so the phone just times out.
+    /// Checked in the background so startup is not delayed.
+    pub fn warn_if_public_network() {
+        std::thread::spawn(|| {
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            let out = Command::new("powershell")
+                .args(["-NoProfile", "-Command", "(Get-NetConnectionProfile | Where-Object NetworkCategory -eq 'Public').Name"])
+                .creation_flags(CREATE_NO_WINDOW)
+                .stderr(Stdio::null())
+                .output();
+            if let Ok(o) = out {
+                let names = String::from_utf8_lossy(&o.stdout).trim().replace("\r\n", ", ");
+                if !names.is_empty() {
+                    say!("  ! Windows treats \"{names}\" as a Public network, which blocks your phone.");
+                    say!("    Fix: Settings > Network & internet > Wi-Fi > {names} > Network profile: Private\n");
+                }
+            }
+        });
+    }
+
     pub fn uninstall() -> Result<(), String> {
         quiet(Command::new("reg").args(["delete", RUN_KEY, "/v", "DropCopy", "/f"]));
         quiet(Command::new("netsh").raw_arg("advfirewall firewall delete rule name=DropCopy"));
@@ -270,6 +291,8 @@ mod setup {
     pub fn detach() -> bool {
         false
     }
+
+    pub fn warn_if_public_network() {}
 
     pub fn install() -> Result<(), String> {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
