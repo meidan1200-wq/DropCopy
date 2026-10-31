@@ -45,6 +45,7 @@ pub struct Server {
     clip_lock: Arc<Mutex<()>>,
     popup: bool,
     active: Arc<std::sync::atomic::AtomicUsize>,
+    discovering: bool,
 }
 
 impl Server {
@@ -52,9 +53,11 @@ impl Server {
     pub fn bind(cfg: Arc<Config>, opts: ServeOpts) -> io::Result<Server> {
         let listener = TcpListener::bind(("0.0.0.0", opts.port))?;
         let port = listener.local_addr()?.port();
+        let mut discovering = false;
         match UdpSocket::bind(("0.0.0.0", UDP_PORT)) {
             _ if !opts.discovery => {}
             Ok(sock) => {
+                discovering = true;
                 let cfg = cfg.clone();
                 thread::Builder::new()
                     .name("discovery".into())
@@ -62,7 +65,12 @@ impl Server {
             }
             Err(e) => say!("  ! discovery port {UDP_PORT} unavailable ({e}); phones will use the last known address"),
         }
-        Ok(Server { listener, port, cfg, clip: opts.clip, clip_lock: Arc::new(Mutex::new(())), popup: opts.popup, active: Arc::default() })
+        Ok(Server { listener, port, cfg, clip: opts.clip, clip_lock: Arc::new(Mutex::new(())), popup: opts.popup, active: Arc::default(), discovering })
+    }
+
+    /// Whether it answers discovery (the UDP port may be taken by something else).
+    pub fn discovering(&self) -> bool {
+        self.discovering
     }
 
     pub fn run(self) -> io::Result<()> {

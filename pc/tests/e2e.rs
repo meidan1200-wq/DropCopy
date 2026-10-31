@@ -122,6 +122,10 @@ fn discovery_finds_the_receiver() {
         Ok(s) => s,
         Err(_) => return,
     };
+    if !server.discovering() {
+        eprintln!("skipped: the UDP port was taken in the meantime");
+        return;
+    }
     let port = server.port;
     std::thread::spawn(move || server.run());
     let (sender, _) = Config::load_or_create(dir.join("home")).unwrap();

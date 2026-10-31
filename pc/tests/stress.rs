@@ -323,6 +323,10 @@ fn discovery_survives_a_flood() {
     let (mut cfg, _) = Config::load_or_create(dir.join("home")).unwrap();
     cfg.save_dir = dir.join("received");
     let server = Server::bind(Arc::new(cfg.clone()), ServeOpts { port: 0, clip: ClipMode::Off, discovery: true, popup: false, pairing: false }).unwrap();
+    if !server.discovering() {
+        eprintln!("skipped: the UDP port was taken in the meantime");
+        return;
+    }
     std::thread::spawn(move || server.run());
     let flood = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     let t0 = Instant::now();
