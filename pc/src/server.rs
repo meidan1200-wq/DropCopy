@@ -105,6 +105,8 @@ fn discovery_loop(sock: UdpSocket, cfg: &Config, port: u16, pairing: bool) {
         let Ok((n, from)) = sock.recv_from(&mut buf) else { continue };
         if n == 28 && &buf[..4] == DISCOVER_MAGIC && buf[4..12] == cfg.id {
             let _ = sock.send_to(&reply_packet(&cfg.id, &cfg.key, &buf[12..28], port), from);
+        } else if n == 28 && &buf[..4] == NEAR_ASK_MAGIC && buf[4..12] == cfg.id {
+            let _ = sock.send_to(&near_answer(&cfg.id, &cfg.key, &buf[12..28], &crate::near::status()), from);
         } else if n == 4 && &buf[..4] == STOP_MAGIC && from.ip().is_loopback() {
             say!("  stopping: a newer copy is taking over");
             std::process::exit(0);

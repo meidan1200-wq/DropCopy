@@ -19,6 +19,10 @@ pub const REPLY_MAGIC: &[u8; 4] = b"DCR1";
 /// An unpaired phone asking "is a DropCopy PC here?" so the PC can put its pairing code on screen.
 pub const PAIR_ASK_MAGIC: &[u8; 4] = b"DCQ1";
 pub const PAIR_ANSWER_MAGIC: &[u8; 4] = b"DCA1";
+/// The phone asking "do you see me over Bluetooth?" while the user sets proximity up.
+pub const NEAR_ASK_MAGIC: &[u8; 4] = b"DCN1";
+pub const NEAR_ANSWER_MAGIC: &[u8; 4] = b"DCM1";
+const L_NEARQ: &[u8] = b"dropcopy/v1/nearq";
 /// From this machine only: a newer copy asking the running one to quit so it can take over.
 pub const STOP_MAGIC: &[u8; 4] = b"DCS1";
 pub const TCP_PORT: u16 = 48650;
@@ -204,6 +208,24 @@ pub fn pair_answer(nonce: &[u8], name: &str) -> Vec<u8> {
     p.extend_from_slice(PAIR_ANSWER_MAGIC);
     p.extend_from_slice(&nonce[..8]);
     p.extend_from_slice(&name.as_bytes()[..end]);
+    p
+}
+
+/// "DCM1" | id[8] | body[7] | HMAC(K, "dropcopy/v1/nearq" | nonce | body)[..16], where body is
+/// state u8 | smoothed dBm i16 (i16::MIN = not heard in the last 5 s) | threshold i16 | age ms u16.
+pub fn near_answer(id: &[u8; 8], key: &[u8; 32], nonce: &[u8], st: &crate::near::Status) -> Vec<u8> {
+    let fresh = st.last.filter(|(_, age)| age.as_secs() < 5);
+    let dbm = fresh.map(|(s, _)| s.round() as i16).unwrap_or(i16::MIN);
+    let age = fresh.map(|(_, a)| a.as_millis().min(65_535) as u16).unwrap_or(u16::MAX);
+    let mut body = vec![st.state];
+    body.extend_from_slice(&dbm.to_be_bytes());
+    body.extend_from_slice(&st.threshold.to_be_bytes());
+    body.extend_from_slice(&age.to_be_bytes());
+    let mut p = Vec::with_capacity(35);
+    p.extend_from_slice(NEAR_ANSWER_MAGIC);
+    p.extend_from_slice(id);
+    p.extend_from_slice(&body);
+    p.extend_from_slice(&hmac(key, &[L_NEARQ, nonce, &body])[..16]);
     p
 }
 

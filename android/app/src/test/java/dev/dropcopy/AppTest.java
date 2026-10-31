@@ -95,6 +95,60 @@ public class AppTest {
     }
 
     @Test
+    public void turningOnNearOpensSetupThatShowsWhatTheLaptopHears() throws Exception {
+        java.net.DatagramSocket pcSock;
+        try {
+            pcSock = new java.net.DatagramSocket(Proto.UDP_PORT, java.net.InetAddress.getByName("127.0.0.1"));
+        } catch (java.net.BindException e) {
+            org.junit.Assume.assumeTrue("UDP port in use by a running receiver", false);
+            return;
+        }
+        Store.add(app, LINK.replaceAll("&a=[^&]*", "") + "&a=127.0.0.1");
+        Proto.Pc pc = Store.pcs(app).get(0);
+        // A PC that hears the phone at -48 dBm and pops up at -55.
+        Thread t = new Thread(() -> {
+            try {
+                byte[] b = new byte[64];
+                for (int k = 0; k < 20; k++) {
+                    java.net.DatagramPacket p = new java.net.DatagramPacket(b, b.length);
+                    pcSock.receive(p);
+                    if (p.getLength() != 28 || b[0] != 'D' || b[2] != 'N') continue;
+                    byte[] nonce = java.util.Arrays.copyOfRange(b, 12, 28);
+                    byte[] body = {2, (byte) 0xff, (byte) 0xd0, (byte) 0xff, (byte) 0xc9, 0, 100};
+                    byte[] tag = Proto.hmac(pc.key, "dropcopy/v1/nearq".getBytes("US-ASCII"), nonce, body);
+                    java.io.ByteArrayOutputStream o = new java.io.ByteArrayOutputStream();
+                    o.write("DCM1".getBytes("US-ASCII"));
+                    o.write(pc.id);
+                    o.write(body);
+                    o.write(tag, 0, 16);
+                    byte[] ans = o.toByteArray();
+                    pcSock.send(new java.net.DatagramPacket(ans, ans.length, p.getSocketAddress()));
+                }
+            } catch (Exception ignored) { }
+        });
+        t.start();
+        try {
+            shadowOf(app).grantPermissions(android.Manifest.permission.BLUETOOTH_ADVERTISE);
+            android.bluetooth.BluetoothManager bm = app.getSystemService(android.bluetooth.BluetoothManager.class);
+            shadowOf(bm.getAdapter()).setEnabled(true);
+            MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
+            a.findViewById(R.id.row_near).performClick();
+            android.app.Dialog d = org.robolectric.shadows.ShadowDialog.getLatestDialog();
+            assertNotNull("tapping the switch opens the setup window", d);
+            android.widget.TextView seen = d.findViewById(R.id.near_seen_detail);
+            for (int k = 0; k < 60 && !seen.getText().toString().contains("dBm"); k++) {
+                Thread.sleep(50);
+                shadowOf(Looper.getMainLooper()).idle();
+            }
+            assertEquals("Sees this phone · -48 dBm. Close enough: your last photo pops up.", seen.getText().toString());
+            assertEquals("Allowed", ((android.widget.TextView) d.findViewById(R.id.near_perm_detail)).getText().toString());
+        } finally {
+            pcSock.close();
+            t.join(2000);
+        }
+    }
+
+    @Test
     public void unpairedPhoneShowsNoSettingsYet() {
         MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
         assertEquals(android.view.View.GONE, a.findViewById(R.id.needs_card).getVisibility());

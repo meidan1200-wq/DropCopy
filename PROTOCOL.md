@@ -36,6 +36,17 @@ A phone with no pairing (or whose PC no longer answers its id) asks; every PC th
 name and shows the pairing QR code on its own screen, at most once per 20 s. Nothing secret crosses the network:
 the key only ever travels in the QR code. The PC takes the code down when a phone connects with the key.
 
+### "Does my PC see me?" (proximity setup)
+
+```
+phone → PC/broadcast "DCN1" | id[8] | nonce[16]                               (28 bytes)
+PC    → phone        "DCM1" | id[8] | body[7] | HMAC-SHA256(K, "dropcopy/v1/nearq" | nonce | body)[0..16]
+                     body = state u8 (0 off, 1 no Bluetooth, 2 scanning) | dBm i16 (−32768 = not heard
+                            in 5 s) | threshold i16 | age ms u16
+```
+
+Polled about once a second while the phone's proximity setup window is open, to show a live signal meter.
+
 ### Stopping the running copy (same machine only)
 
 ```

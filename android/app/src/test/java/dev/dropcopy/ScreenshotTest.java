@@ -73,6 +73,39 @@ public class ScreenshotTest {
         });
     }
 
+    /** The "Show on PC when near" window, with the laptop hearing the phone a little too far away. */
+    @Test
+    @Config(qualifiers = "w411dp-h891dp-night-xxhdpi")
+    public void nearSetupDark() throws Exception {
+        String dir = System.getenv("DROPCOPY_SHOTS");
+        assumeTrue("set DROPCOPY_SHOTS to write screenshots", dir != null && !dir.isEmpty());
+        android.app.Application app = RuntimeEnvironment.getApplication();
+        Store.add(app, LINK);
+        org.robolectric.Shadows.shadowOf(app).grantPermissions(android.Manifest.permission.BLUETOOTH_ADVERTISE);
+        android.bluetooth.BluetoothManager bm = app.getSystemService(android.bluetooth.BluetoothManager.class);
+        org.robolectric.Shadows.shadowOf(bm.getAdapter()).setEnabled(true);
+        MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
+        java.lang.reflect.Method show = MainActivity.class.getDeclaredMethod("showNearSetup");
+        show.setAccessible(true);
+        show.invoke(a);
+        java.lang.reflect.Method upd = MainActivity.class.getDeclaredMethod("updateNearDialog", Proto.NearStatus.class, boolean.class);
+        upd.setAccessible(true);
+        upd.invoke(a, new Proto.NearStatus(Proto.NearStatus.SCANNING, -63, -55), true);
+        android.app.Dialog d = org.robolectric.shadows.ShadowDialog.getLatestDialog();
+        View v = d.getWindow().getDecorView();
+        int w = 1233 - 96;
+        v.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
+        v.layout(0, 0, w, v.getMeasuredHeight());
+        Bitmap bmp = Bitmap.createBitmap(w + 96, v.getMeasuredHeight() + 96, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        c.drawColor(0xFF08090B); // the dimmed app behind
+        c.translate(48, 48);
+        v.draw(c);
+        try (FileOutputStream out = new FileOutputStream(new File(dir, "near-setup-dark.png"))) {
+            bmp.compress(Bitmap.CompressFormat.PNG, 100, out);
+        }
+    }
+
     @Test
     public void pairedLight() throws Exception {
         Store.add(RuntimeEnvironment.getApplication(), LINK);

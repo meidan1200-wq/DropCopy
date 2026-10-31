@@ -109,6 +109,39 @@ pub struct Reading {
     pub came_near: bool,
 }
 
+/// What the Bluetooth watcher knows right now, for the phone's "does my PC see me?" check.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Status {
+    pub state: u8,
+    /// Smoothed strength and how long ago it was heard.
+    pub last: Option<(f32, Duration)>,
+    pub threshold: i16,
+}
+
+/// `Status::state`: not watching (turned off), Bluetooth unavailable, scanning.
+pub const OFF: u8 = 0;
+pub const NO_BLUETOOTH: u8 = 1;
+pub const SCANNING: u8 = 2;
+
+static STATE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(OFF);
+static THRESHOLD: std::sync::atomic::AtomicI16 = std::sync::atomic::AtomicI16::new(-55);
+static LAST: std::sync::Mutex<Option<(f32, Instant)>> = std::sync::Mutex::new(None);
+
+pub fn status() -> Status {
+    use std::sync::atomic::Ordering::Relaxed;
+    let last = LAST.lock().unwrap_or_else(|e| e.into_inner()).map(|(s, t)| (s, t.elapsed()));
+    Status { state: STATE.load(Relaxed), last, threshold: THRESHOLD.load(Relaxed) }
+}
+
+fn set_state(s: u8) {
+    STATE.store(s, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg_attr(not(windows), allow(dead_code))]
+fn heard(smoothed: f32) {
+    *LAST.lock().unwrap_or_else(|e| e.into_inner()) = Some((smoothed, Instant::now()));
+}
+
 /// Watches Bluetooth LE advertisements for this PC's phone and calls `on` for every reading.
 /// Waits quietly while Bluetooth is off or missing, and restarts if Windows stops the scan.
 #[cfg(windows)]
@@ -120,6 +153,8 @@ pub fn watch(key: [u8; 32], enter_dbm: i16, on: impl Fn(Reading) + Send + Sync +
 
     let on = Arc::new(on);
     let det = Arc::new(Mutex::new(Detector::new(enter_dbm)));
+    THRESHOLD.store(enter_dbm, std::sync::atomic::Ordering::Relaxed);
+    set_state(NO_BLUETOOTH);
     let _ = std::thread::Builder::new().name("bluetooth".into()).spawn(move || loop {
         let started = (|| -> windows::core::Result<BluetoothLEAdvertisementWatcher> {
             let w = BluetoothLEAdvertisementWatcher::new()?;
@@ -139,6 +174,7 @@ pub fn watch(key: [u8; 32], enter_dbm: i16, on: impl Fn(Reading) + Send + Sync +
                             let came_near = d.feed(rssi, Instant::now());
                             let smoothed = d.smoothed().unwrap_or(rssi as f32);
                             drop(d);
+                            heard(smoothed);
                             on(Reading { rssi, smoothed, came_near });
                         }
                     }
@@ -150,19 +186,31 @@ pub fn watch(key: [u8; 32], enter_dbm: i16, on: impl Fn(Reading) + Send + Sync +
         })();
         match started {
             Ok(w) => {
+                set_state(SCANNING);
                 // Bluetooth switched off, or the adapter went to sleep: the scan stops; start over.
                 while matches!(w.Status(), Ok(BluetoothLEAdvertisementWatcherStatus::Started | BluetoothLEAdvertisementWatcherStatus::Created)) {
                     std::thread::sleep(Duration::from_secs(5));
                 }
                 let _ = w.Stop();
+                set_state(NO_BLUETOOTH);
             }
-            Err(_) => std::thread::sleep(Duration::from_secs(30)),
+            // No adapter, or Bluetooth is off: try again soon, so switching it on is noticed.
+            Err(_) => std::thread::sleep(Duration::from_secs(10)),
         }
     });
 }
 
 #[cfg(not(windows))]
-pub fn watch(_key: [u8; 32], _enter_dbm: i16, _on: impl Fn(Reading) + Send + Sync + 'static) {}
+pub fn watch(_key: [u8; 32], _enter_dbm: i16, _on: impl Fn(Reading) + Send + Sync + 'static) {
+    set_state(NO_BLUETOOTH);
+}
+
+/// For tests: pretend the watcher heard the phone.
+#[doc(hidden)]
+pub fn simulate(state: u8, smoothed: Option<f32>) {
+    set_state(state);
+    *LAST.lock().unwrap_or_else(|e| e.into_inner()) = smoothed.map(|s| (s, Instant::now()));
+}
 
 #[cfg(test)]
 mod tests {

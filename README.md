@@ -33,7 +33,10 @@ phone: Share → DropCopy        PC: file saved to Pictures\DropCopy
    keep working.
 3. If anything still needs your OK on the phone (battery saving, notifications, installing updates), a
    **Needs your OK** card lists exactly that, with one button each.
-4. Optional: pull down Quick Settings → edit → add the **Send clipboard** tile.
+4. **Show on PC when near** opens a small setup window: Bluetooth on, Nearby devices allowed, and a live
+   meter of how strongly your laptop hears the phone. No Bluetooth pairing is needed. Tap the row again
+   any time to reopen it.
+5. Optional: pull down Quick Settings → edit → add the **Send clipboard** tile.
 
 ## Sending
 

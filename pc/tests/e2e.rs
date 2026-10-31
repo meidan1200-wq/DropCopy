@@ -137,6 +137,23 @@ fn discovery_finds_the_receiver() {
     assert_eq!(&buf[..12], b"DCA1\x01\x02\x03\x04\x05\x06\x07\x08");
     assert_eq!(std::str::from_utf8(&buf[12..n]).unwrap(), sender.name);
     assert!(n <= 12 + 64);
+
+    // "Does my PC see me?": an authenticated answer with the Bluetooth reading.
+    dropcopy::near::simulate(dropcopy::near::SCANNING, Some(-48.4));
+    let nonce = [7u8; 16];
+    let mut ask = b"DCN1".to_vec();
+    ask.extend_from_slice(&sender.id);
+    ask.extend_from_slice(&nonce);
+    phone.send_to(&ask, ("127.0.0.1", dropcopy::proto::UDP_PORT)).unwrap();
+    let (n, _) = phone.recv_from(&mut buf).unwrap();
+    assert_eq!(n, 35);
+    assert_eq!(&buf[..4], b"DCM1");
+    let body = &buf[12..19];
+    let tag = dropcopy::proto::hmac(&sender.key, &[b"dropcopy/v1/nearq", &nonce, body]);
+    assert_eq!(&buf[19..35], &tag[..16]);
+    assert_eq!(body[0], dropcopy::near::SCANNING);
+    assert_eq!(i16::from_be_bytes([body[1], body[2]]), -48);
+    assert_eq!(i16::from_be_bytes([body[3], body[4]]), -55);
 }
 
 #[test]

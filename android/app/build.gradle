@@ -3,8 +3,8 @@ plugins {
 }
 
 // Set by the release workflow from the tag (v1.2.3 -> 1.2.3 / 10203); local builds use these.
-def appVersionName = (project.findProperty("appVersionName") ?: "0.3.1").toString()
-def appVersionCode = (project.findProperty("appVersionCode") ?: "301").toString().toInteger()
+def appVersionName = (project.findProperty("appVersionName") ?: "0.3.2").toString()
+def appVersionCode = (project.findProperty("appVersionCode") ?: "302").toString().toInteger()
 // The release key comes from the DROPCOPY_KEYSTORE* secrets in CI. Without it, the debug key signs.
 def releaseKeystore = System.getenv("DROPCOPY_KEYSTORE")
 

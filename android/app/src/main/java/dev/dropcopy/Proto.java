@@ -51,6 +51,7 @@ public final class Proto {
 
     static final byte[] MAGIC = ascii("DCP1"), DISCOVER = ascii("DCD1"), REPLY = ascii("DCR1");
     static final byte[] PAIR_ASK = ascii("DCQ1"), PAIR_ANSWER = ascii("DCA1");
+    static final byte[] NEAR_ASK = ascii("DCN1"), NEAR_ANSWER = ascii("DCM1"), L_NEARQ = ascii("dropcopy/v1/nearq");
     static final byte[] L_SRV = ascii("dropcopy/v1/srv"), L_C2S = ascii("dropcopy/v1/c2s"),
             L_S2C = ascii("dropcopy/v1/s2c"), L_DISC = ascii("dropcopy/v1/disc");
 
@@ -309,6 +310,64 @@ public final class Proto {
             }
         } catch (IOException ignored) { }
         return null;
+    }
+
+    /** What the PC's Bluetooth watcher reports about this phone. */
+    public static final class NearStatus {
+        public static final int OFF = 0, NO_BLUETOOTH = 1, SCANNING = 2;
+        public final int state;
+        /** Smoothed strength in dBm, or null if not heard in the last few seconds. */
+        public final Integer dbm;
+        /** How strong counts as close. */
+        public final int threshold;
+
+        NearStatus(int state, Integer dbm, int threshold) {
+            this.state = state;
+            this.dbm = dbm;
+            this.threshold = threshold;
+        }
+    }
+
+    /** Asks the PC whether it hears this phone over Bluetooth; null if it doesn't answer. */
+    public static NearStatus askNear(Pc pc, List<InetAddress> targets, int timeoutMs) {
+        byte[] nonce = random(16);
+        byte[] ask = new byte[28];
+        System.arraycopy(NEAR_ASK, 0, ask, 0, 4);
+        System.arraycopy(pc.id, 0, ask, 4, 8);
+        System.arraycopy(nonce, 0, ask, 12, 16);
+        List<InetAddress> to = new ArrayList<>();
+        try { if (pc.host != null && !pc.host.isEmpty()) to.add(InetAddress.getByName(pc.host)); } catch (IOException ignored) { }
+        to.addAll(targets);
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        try (DatagramSocket udp = new DatagramSocket()) {
+            udp.setBroadcast(true);
+            for (InetAddress a : to) {
+                try { udp.send(new DatagramPacket(ask, ask.length, a, UDP_PORT)); } catch (IOException ignored) { }
+            }
+            byte[] buf = new byte[64];
+            while (System.currentTimeMillis() < deadline) {
+                udp.setSoTimeout((int) Math.max(1, deadline - System.currentTimeMillis()));
+                DatagramPacket p = new DatagramPacket(buf, buf.length);
+                try { udp.receive(p); } catch (SocketTimeoutException e) { break; }
+                NearStatus st = parseNearAnswer(slice(buf, 0, p.getLength()), pc, nonce);
+                if (st != null) return st;
+            }
+        } catch (IOException ignored) { }
+        return null;
+    }
+
+    static NearStatus parseNearAnswer(byte[] pkt, Pc pc, byte[] nonce) {
+        if (pkt.length != 35) return null;
+        for (int i = 0; i < 4; i++) if (pkt[i] != NEAR_ANSWER[i]) return null;
+        for (int i = 0; i < 8; i++) if (pkt[4 + i] != pc.id[i]) return null;
+        byte[] body = slice(pkt, 12, 19);
+        byte[] want = slice(hmac(pc.key, L_NEARQ, nonce, body), 0, 16);
+        if (!MessageDigest.isEqual(want, slice(pkt, 19, 35))) return null;
+        ByteBuffer b = ByteBuffer.wrap(body);
+        int state = b.get() & 0xff;
+        short dbm = b.getShort();
+        short threshold = b.getShort();
+        return new NearStatus(state, dbm == Short.MIN_VALUE ? null : (int) dbm, threshold);
     }
 
     /** "DCA1" | nonce[8] | name; null if it isn't the answer to {@code nonce}. */

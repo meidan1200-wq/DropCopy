@@ -182,7 +182,10 @@ public class WatchService extends Service {
 
     /** Advertises only while the screen is on: that is when the phone is in a hand. */
     private void startNearWatch() {
-        if (nearEvents != null) return;
+        if (nearEvents != null) { // already watching; maybe Bluetooth permission just arrived
+            updateAdvertising();
+            return;
+        }
         main = new Handler(android.os.Looper.getMainLooper());
         nearEvents = new BroadcastReceiver() {
             @Override

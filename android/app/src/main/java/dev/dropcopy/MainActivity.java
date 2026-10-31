@@ -2,6 +2,12 @@ package dev.dropcopy;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.Dialog;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothManager;
+import android.os.Handler;
+import android.os.Looper;
+import android.widget.ProgressBar;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
@@ -35,6 +41,32 @@ public class MainActivity extends Activity {
     private String waitingPc;
     /** The scanner opens by itself once per launch, when a PC puts its code on screen. */
     private static boolean autoScanned;
+    /** The screen the user is looking at, if any: an install they started can then show at once. */
+    private static java.lang.ref.WeakReference<MainActivity> current = new java.lang.ref.WeakReference<>(null);
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private Dialog nearDialog;
+    private boolean nearAsking;
+
+    static boolean visible() {
+        return current.get() != null;
+    }
+
+    /** An install the user started was cancelled or failed: give the button back. */
+    static void installEnded() {
+        MainActivity a = current.get();
+        if (a == null) return;
+        a.runOnUiThread(() -> {
+            Button b = a.findViewById(R.id.update_install);
+            b.setEnabled(true);
+            b.setText("Install update");
+        });
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        current = new java.lang.ref.WeakReference<>(null);
+    }
 
     @Override
     protected void onCreate(Bundle state) {
@@ -82,6 +114,10 @@ public class MainActivity extends Activity {
         bind(R.id.row_shots, shots, Store.WATCH_SCREENSHOTS);
         bind(R.id.row_camera, camera, Store.WATCH_CAMERA);
         bind(R.id.row_near, near, Store.NEAR);
+        // Already on: tapping the row reopens the setup and its live check; the switch turns it off.
+        findViewById(R.id.row_near).setOnClickListener(v -> {
+            if (near.isChecked()) showNearSetup(); else near.toggle();
+        });
         updates.setChecked(Store.autoUpdate(this));
         findViewById(R.id.row_updates).setOnClickListener(v -> updates.toggle());
         updates.setOnCheckedChangeListener((b, on) -> {
@@ -98,6 +134,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        current = new java.lang.ref.WeakReference<>(this);
         refresh(); // e.g. back from the battery or permission settings
         if (Store.pcs(this).isEmpty()) askPcToShowCode(false);
     }
@@ -151,7 +188,128 @@ public class MainActivity extends Activity {
             if (on) requestPermissionsIfNeeded();
             WatchService.sync(this);
             refresh();
+            if (on && Store.NEAR.equals(key)) showNearSetup();
         });
+    }
+
+    // ---- "Show on PC when near" setup ------------------------------------------------------
+
+    /** A small window over the app: what proximity needs, and whether the laptop sees the phone. */
+    private void showNearSetup() {
+        if (nearDialog != null && nearDialog.isShowing()) return;
+        Dialog d = new Dialog(this);
+        d.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
+        d.setContentView(R.layout.dialog_near);
+        if (d.getWindow() != null) {
+            d.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+            int w = Math.min(getResources().getDisplayMetrics().widthPixels - dp(32), dp(420));
+            d.getWindow().setLayout(w, android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+        d.findViewById(R.id.near_bt_btn).setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS)));
+        d.findViewById(R.id.near_perm_btn).setOnClickListener(v -> {
+            if (Build.VERSION.SDK_INT >= 31) requestPermissions(new String[]{Manifest.permission.BLUETOOTH_ADVERTISE}, 3);
+        });
+        d.findViewById(R.id.near_done).setOnClickListener(v -> d.dismiss());
+        d.setOnDismissListener(x -> {
+            ui.removeCallbacks(nearPoll);
+            nearDialog = null;
+        });
+        nearDialog = d;
+        d.show();
+        ui.post(nearPoll);
+    }
+
+    private int dp(int v) {
+        return Math.round(v * getResources().getDisplayMetrics().density);
+    }
+
+    private final Runnable nearPoll = new Runnable() {
+        @Override
+        public void run() {
+            if (nearDialog == null) return;
+            updateNearDialog(null, false);
+            ui.postDelayed(this, 1200);
+        }
+    };
+
+    private boolean bluetoothOn() {
+        BluetoothManager bm = getSystemService(BluetoothManager.class);
+        BluetoothAdapter a = bm == null ? null : bm.getAdapter();
+        try {
+            return a != null && a.isEnabled();
+        } catch (SecurityException e) {
+            return false;
+        }
+    }
+
+    private boolean advertiseAllowed() {
+        return Build.VERSION.SDK_INT < 31 || checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /** Refreshes the rows; asks the PC unless {@code answered} (then {@code st} is its answer). */
+    private void updateNearDialog(Proto.NearStatus st, boolean answered) {
+        Dialog d = nearDialog;
+        if (d == null) return;
+        boolean bt = bluetoothOn(), perm = advertiseAllowed();
+        tint(d.findViewById(R.id.near_bt_dot), bt ? R.color.ok : R.color.warn);
+        ((TextView) d.findViewById(R.id.near_bt_detail)).setText(bt ? "On" : "Off");
+        d.findViewById(R.id.near_bt_btn).setVisibility(bt ? View.GONE : View.VISIBLE);
+        tint(d.findViewById(R.id.near_perm_dot), perm ? R.color.ok : R.color.warn);
+        ((TextView) d.findViewById(R.id.near_perm_detail)).setText(perm ? "Allowed" : "Lets the laptop see this phone");
+        d.findViewById(R.id.near_perm_btn).setVisibility(perm ? View.GONE : View.VISIBLE);
+
+        TextView seen = d.findViewById(R.id.near_seen_detail);
+        ProgressBar meter = d.findViewById(R.id.near_meter);
+        List<Proto.Pc> pcs = Store.pcs(this);
+        if (pcs.isEmpty() || !bt || !perm) {
+            tint(d.findViewById(R.id.near_seen_dot), R.color.idle);
+            seen.setText(pcs.isEmpty() ? "Pair with your PC first." : !bt ? "Turn on Bluetooth first." : "Allow Nearby devices first.");
+            meter.setVisibility(View.INVISIBLE);
+            return;
+        }
+        if (!answered) {
+            if (nearAsking) return;
+            nearAsking = true;
+            Proto.Pc pc = pcs.get(0);
+            new Thread(() -> {
+                Proto.NearStatus s = Proto.askNear(pc, Proto.broadcastAddresses(), 900);
+                runOnUiThread(() -> {
+                    nearAsking = false;
+                    updateNearDialog(s, true);
+                });
+            }).start();
+            return;
+        }
+        int dot;
+        String text;
+        Integer dbm = st == null ? null : st.dbm;
+        if (st == null) {
+            dot = R.color.warn;
+            text = "Can't reach your PC. Is DropCopy running on it, on this Wi-Fi?";
+        } else if (st.state == Proto.NearStatus.OFF) {
+            dot = R.color.warn;
+            text = "Turned off on the PC. On the PC run: dropcopy set near on";
+        } else if (st.state == Proto.NearStatus.NO_BLUETOOTH) {
+            dot = R.color.warn;
+            text = "Your laptop's Bluetooth is off. Turn it on in Windows quick settings.";
+        } else if (dbm == null) {
+            dot = R.color.idle;
+            text = "Not seen yet. Hold the phone right next to the laptop.";
+        } else if (dbm >= st.threshold) {
+            dot = R.color.ok;
+            text = "Sees this phone · " + dbm + " dBm. Close enough: your last photo pops up.";
+        } else {
+            dot = R.color.accent;
+            text = "Sees this phone · " + dbm + " dBm. A bit closer and it pops up (at " + st.threshold + ").";
+        }
+        tint(d.findViewById(R.id.near_seen_dot), dot);
+        seen.setText(text);
+        meter.setVisibility(dbm == null ? View.INVISIBLE : View.VISIBLE);
+        if (dbm != null) meter.setProgress(Math.max(0, Math.min(60, dbm + 100)));
+    }
+
+    private void tint(ImageView v, int colorRes) {
+        v.setImageTintList(ColorStateList.valueOf(getColor(colorRes)));
     }
 
     private void handle(Intent intent) {
@@ -369,6 +527,7 @@ public class MainActivity extends Activity {
     @Override
     public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
         WatchService.sync(this);
+        if (nearDialog != null) updateNearDialog(null, false);
         if ((shots.isChecked() || camera.isChecked()) && checkSelfPermission(WatchService.mediaPermission()) != PackageManager.PERMISSION_GRANTED) {
             Transfer.toast(this, "Sending new screenshots needs access to all photos");
         }
