@@ -46,15 +46,25 @@ phone: Share → DropCopy        PC: file saved to Pictures\DropCopy
 | Copy something, tap the **Send clipboard** tile | The phone's clipboard (text or image) goes to the PC's clipboard. |
 | Turn on **Auto-send new screenshots** (or camera photos), then take a screenshot | Zero taps: it's on the PC's clipboard a moment later. |
 
-**The little phone.** When a photo arrives, a small phone with the photo on its screen rises from the middle
-of the taskbar. Drag it into any app (chat, mail, Word, a folder) to drop the file there, click it to open,
-or leave it and it slides away after a few seconds; hovering keeps it up. `dropcopy set popup off` turns it off.
+**Bring the phone close (the little phone).** Turn on *Show on PC when near* in the app. Hold the phone next
+to your laptop and it sends its newest photo; a small phone with that photo on its screen rises from the
+middle of the taskbar. Drag it into any app (chat, mail, Word, a folder) to drop it there, click to open it,
+or leave it and it slides away; hovering keeps it up. That preview is a temporary file
+(`%APPDATA%\DropCopy\nearby`), never in Pictures\DropCopy: it is deleted when the little phone goes, or an
+hour later if you dragged or opened it, and anything left over is removed at the next start. Normal sharing
+shows no popup: it is already on the clipboard for Ctrl+V.
 
-**Bring the phone close.** Turn on *Show on PC when near* in the app. Hold the phone next to your laptop and
-the last photo it sent pops up again, ready to drag. It works over Bluetooth Low Energy: while the screen is
-on, the phone broadcasts a token that changes every minute and only your PC can recognise; the PC watches its
-signal strength. Laptops work best (the Bluetooth antenna is in the lid or keyboard). Run `dropcopy near` to
-see live readings and `dropcopy set near_rssi -50` to make "close" closer (higher) or farther (lower).
+It works over Bluetooth Low Energy: while the screen is on, the phone broadcasts a token that changes every
+minute and only your PC can recognise; the PC watches its signal strength and then asks the phone (over
+Wi-Fi, authenticated) for the photo. Laptops work best (the antenna is in the lid or keyboard). The setup
+window in the app shows the live signal; `dropcopy set near_rssi -50` makes "close" closer (higher) or
+farther (lower). `dropcopy set popup off` turns the little phone off.
+
+**Delete from PC after pasting** (phone app, asks twice). Pictures you send are deleted from
+Pictures\DropCopy 30 seconds after the first paste, or 5 seconds after you copy anything else on the PC, or
+at the next start if never pasted. Pasting the image again keeps working (it is on the clipboard); pasting it
+*as a file* works only within those 30 seconds. If Windows clipboard history (Win+V) is on, it may read the
+picture at once, which counts as a paste.
 
 **Updates.** Both apps update themselves from this repository's releases. The PC's background copy checks
 shortly after start and every 6 hours, verifies the download's SHA-256, swaps itself and restarts; run

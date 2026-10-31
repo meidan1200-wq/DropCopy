@@ -466,11 +466,58 @@
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="2dp"
-                        android:text="Hold the phone by your laptop to bring up the last photo" />
+                        android:text="Hold the phone by your laptop to bring up your newest photo" />
                 </LinearLayout>
 
                 <Switch
                     android:id="@+id/sw_near"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:thumbTint="@color/switch_thumb"
+                    android:trackTint="@color/switch_track" />
+            </LinearLayout>
+
+            <ImageView
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/divider" />
+
+            <LinearLayout
+                android:id="@+id/row_delete"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_button_text"
+                android:gravity="center_vertical"
+                android:minHeight="72dp"
+                android:orientation="horizontal"
+                android:paddingTop="10dp"
+                android:paddingBottom="10dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/Title"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Delete from PC after pasting" />
+
+                    <TextView
+                        android:id="@+id/delete_detail"
+                        style="@style/Body"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="Nothing piles up in Pictures\\DropCopy" />
+                </LinearLayout>
+
+                <Switch
+                    android:id="@+id/sw_delete"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="12dp"
@@ -526,7 +573,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:text="Photos land in Pictures\\DropCopy and on the clipboard: press Ctrl+V, or drag the little phone above the taskbar into any app." />
+                android:text="Photos land in Pictures\\DropCopy and on the clipboard: press Ctrl+V. Hold the phone by your laptop and the newest one shows on a little phone above the taskbar, ready to drag into any app." />
         </LinearLayout>
 
         <!-- App -->

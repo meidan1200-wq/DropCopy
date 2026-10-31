@@ -33,7 +33,7 @@ public class MainActivity extends Activity {
     private TextView pcName, pcDetail, statusMessage;
     private ImageView dot;
     private Button scan, check;
-    private Switch shots, camera, near, updates;
+    private Switch shots, camera, near, updates, deleteAfter;
     private View updateCard, needsCard;
     private Updater.Release pendingUpdate;
     private boolean checking, asking;
@@ -82,6 +82,7 @@ public class MainActivity extends Activity {
         camera = findViewById(R.id.sw_camera);
         near = findViewById(R.id.sw_near);
         updates = findViewById(R.id.sw_updates);
+        deleteAfter = findViewById(R.id.sw_delete);
         updateCard = findViewById(R.id.update_card);
         needsCard = findViewById(R.id.needs_card);
         ((TextView) findViewById(R.id.version)).setText("v" + BuildConfig.VERSION_NAME);
@@ -103,7 +104,8 @@ public class MainActivity extends Activity {
         findViewById(R.id.update_install).setOnClickListener(v -> installUpdate());
         findViewById(R.id.forget).setOnClickListener(v -> {
             Store.forgetAll(this);
-            for (String k : new String[]{Store.WATCH_SCREENSHOTS, Store.WATCH_CAMERA, Store.NEAR}) Store.setFlag(this, k, false);
+            for (String k : new String[]{Store.WATCH_SCREENSHOTS, Store.WATCH_CAMERA, Store.NEAR, Store.DELETE_AFTER_PASTE}) Store.setFlag(this, k, false);
+            setDeleteSwitch(false);
             shots.setChecked(false);
             camera.setChecked(false);
             near.setChecked(false);
@@ -118,6 +120,7 @@ public class MainActivity extends Activity {
         findViewById(R.id.row_near).setOnClickListener(v -> {
             if (near.isChecked()) showNearSetup(); else near.toggle();
         });
+        bindDeleteAfterPaste();
         updates.setChecked(Store.autoUpdate(this));
         findViewById(R.id.row_updates).setOnClickListener(v -> updates.toggle());
         updates.setOnCheckedChangeListener((b, on) -> {
@@ -192,6 +195,48 @@ public class MainActivity extends Activity {
         });
     }
 
+    // ---- "Delete from PC after pasting" ---------------------------------------------------
+
+    private boolean settingDelete;
+
+    /** Off is one tap. On asks twice, with the warning, because pictures can then be lost on the PC. */
+    private void bindDeleteAfterPaste() {
+        deleteAfter.setChecked(Store.flag(this, Store.DELETE_AFTER_PASTE));
+        findViewById(R.id.row_delete).setOnClickListener(v -> deleteAfter.toggle());
+        deleteAfter.setOnCheckedChangeListener((b, on) -> {
+            if (settingDelete) return;
+            if (!on) {
+                Store.setFlag(this, Store.DELETE_AFTER_PASTE, false);
+                return;
+            }
+            setDeleteSwitch(false); // stays off until both answers are yes
+            new android.app.AlertDialog.Builder(this)
+                    .setTitle("Delete pictures from the PC after pasting?")
+                    .setMessage("Each picture you send is deleted from Pictures\\DropCopy on your PC:\n\n"
+                            + "•  30 seconds after you paste it with Ctrl+V\n"
+                            + "•  as soon as you copy something else on the PC first: text, a file, anything\n"
+                            + "•  when the PC restarts before you paste it\n\n"
+                            + "If you don't paste it in time, it is gone from the PC. The original stays on this phone.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Continue", (d1, w1) -> new android.app.AlertDialog.Builder(this)
+                            .setTitle("Are you sure?")
+                            .setMessage("Deleted pictures don't go to the Recycle Bin and can't be recovered on the PC.")
+                            .setNegativeButton("Keep them", null)
+                            .setPositiveButton("Turn on", (d2, w2) -> {
+                                Store.setFlag(this, Store.DELETE_AFTER_PASTE, true);
+                                setDeleteSwitch(true);
+                            })
+                            .show())
+                    .show();
+        });
+    }
+
+    private void setDeleteSwitch(boolean on) {
+        settingDelete = true;
+        deleteAfter.setChecked(on);
+        settingDelete = false;
+    }
+
     // ---- "Show on PC when near" setup ------------------------------------------------------
 
     /** A small window over the app: what proximity needs, and whether the laptop sees the phone. */
@@ -209,6 +254,7 @@ public class MainActivity extends Activity {
         d.findViewById(R.id.near_perm_btn).setOnClickListener(v -> {
             if (Build.VERSION.SDK_INT >= 31) requestPermissions(new String[]{Manifest.permission.BLUETOOTH_ADVERTISE}, 3);
         });
+        d.findViewById(R.id.near_photo_btn).setOnClickListener(v -> requestPermissions(new String[]{WatchService.mediaPermission()}, 4));
         d.findViewById(R.id.near_done).setOnClickListener(v -> d.dismiss());
         d.setOnDismissListener(x -> {
             ui.removeCallbacks(nearPoll);
@@ -257,6 +303,10 @@ public class MainActivity extends Activity {
         tint(d.findViewById(R.id.near_perm_dot), perm ? R.color.ok : R.color.warn);
         ((TextView) d.findViewById(R.id.near_perm_detail)).setText(perm ? "Allowed" : "Lets the laptop see this phone");
         d.findViewById(R.id.near_perm_btn).setVisibility(perm ? View.GONE : View.VISIBLE);
+        boolean photos = checkSelfPermission(WatchService.mediaPermission()) == PackageManager.PERMISSION_GRANTED;
+        tint(d.findViewById(R.id.near_photo_dot), photos ? R.color.ok : R.color.warn);
+        ((TextView) d.findViewById(R.id.near_photo_detail)).setText(photos ? "Allowed" : "Lets it send your newest photo");
+        d.findViewById(R.id.near_photo_btn).setVisibility(photos ? View.GONE : View.VISIBLE);
 
         TextView seen = d.findViewById(R.id.near_seen_detail);
         ProgressBar meter = d.findViewById(R.id.near_meter);
@@ -297,7 +347,7 @@ public class MainActivity extends Activity {
             text = "Not seen yet. Hold the phone right next to the laptop.";
         } else if (dbm >= st.threshold) {
             dot = R.color.ok;
-            text = "Sees this phone · " + dbm + " dBm. Close enough: your last photo pops up.";
+            text = "Sees this phone · " + dbm + " dBm. Close enough: your newest photo pops up.";
         } else {
             dot = R.color.accent;
             text = "Sees this phone · " + dbm + " dBm. A bit closer and it pops up (at " + st.threshold + ").";
@@ -515,8 +565,8 @@ public class MainActivity extends Activity {
             want.add(Manifest.permission.POST_NOTIFICATIONS);
             Store.setFlag(this, ASKED_NOTIFY, true);
         }
-        if ((shots.isChecked() || camera.isChecked()) && checkSelfPermission(WatchService.mediaPermission()) != PackageManager.PERMISSION_GRANTED) {
-            want.add(WatchService.mediaPermission());
+        if ((shots.isChecked() || camera.isChecked() || near.isChecked()) && checkSelfPermission(WatchService.mediaPermission()) != PackageManager.PERMISSION_GRANTED) {
+            want.add(WatchService.mediaPermission()); // "near" sends the newest photo
         }
         if (near.isChecked() && Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) != PackageManager.PERMISSION_GRANTED) {
             want.add(Manifest.permission.BLUETOOTH_ADVERTISE);

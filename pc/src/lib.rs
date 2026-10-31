@@ -28,6 +28,7 @@ pub fn log_to(dir: &std::path::Path) {
     }
 }
 
+pub mod cleanup;
 pub mod client;
 pub mod clipboard;
 pub mod config;

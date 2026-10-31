@@ -144,6 +144,8 @@ public class WatchService extends Service {
 
     private AdvertisingSet adSet;
     private boolean advertising;
+    /** Lets the PC ask for the newest photo when the phone comes close; runs while advertising. */
+    private NearLink link;
     private BroadcastReceiver nearEvents;
     private Handler main;
     private final Runnable rotate = new Runnable() {
@@ -228,12 +230,15 @@ public class WatchService extends Service {
                         .build();
                 adv.startAdvertisingSet(p, nearData(), null, null, null, adCallback);
                 advertising = true;
+                if (link == null) link = new NearLink(this);
+                link.start();
                 main.removeCallbacks(rotate);
                 main.postDelayed(rotate, msToNextMinute());
             } else if ((!on || adv == null) && advertising) {
                 if (adv != null) adv.stopAdvertisingSet(adCallback);
                 advertising = false;
                 adSet = null;
+                if (link != null) link.stop();
                 main.removeCallbacks(rotate);
             }
         } catch (SecurityException | IllegalStateException e) {

@@ -48,6 +48,11 @@ public final class Proto {
 
     static final byte T_FILE = 0x01, T_DATA = 0x02, T_FILE_END = 0x03, T_TEXT = 0x04, T_END = 0x05;
     static final byte T_OK = 0x10, T_ERR = 0x11;
+    static final byte T_OPTS = 0x06;
+    /** {@link #options} flags: a proximity preview (temporary), and "delete from the PC after pasting". */
+    public static final int OPT_NEARBY = 0x01, OPT_DELETE_AFTER_PASTE = 0x02;
+    static final byte[] HELLO = ascii("DCH1"), PULL = ascii("DCU1"),
+            L_HELLO = ascii("dropcopy/v1/hello"), L_PULL = ascii("dropcopy/v1/pull");
 
     static final byte[] MAGIC = ascii("DCP1"), DISCOVER = ascii("DCD1"), REPLY = ascii("DCR1");
     static final byte[] PAIR_ASK = ascii("DCQ1"), PAIR_ANSWER = ascii("DCA1");
@@ -125,6 +130,35 @@ public final class Proto {
         InputStream open() throws IOException;
         /** Non-null for a text item. */
         default String text() { return null; }
+        /** T_OPTS flags for an options item, else -1. */
+        default int options() { return -1; }
+    }
+
+    /** Tells the PC how to treat the files that follow. */
+    public static Item options(final int flags) {
+        return new Item() {
+            public String name() { return "options"; }
+            public String mime() { return ""; }
+            public long size() { return 0; }
+            public InputStream open() { throw new UnsupportedOperationException(); }
+            public int options() { return flags; }
+        };
+    }
+
+    /** "DCH1" | id | nonce[16] | HMAC(K, hello | nonce)[..16]: where the PC can reach this phone. */
+    static byte[] helloPacket(Pc pc) {
+        byte[] nonce = random(16);
+        ByteBuffer b = ByteBuffer.allocate(44);
+        b.put(HELLO).put(pc.id).put(nonce).put(hmac(pc.key, L_HELLO, nonce), 0, 16);
+        return b.array();
+    }
+
+    /** True for an authentic "send me your newest photo" from {@code pc}. */
+    static boolean isPull(byte[] pkt, Pc pc) {
+        if (pkt.length != 44) return false;
+        for (int i = 0; i < 4; i++) if (pkt[i] != PULL[i]) return false;
+        for (int i = 0; i < 8; i++) if (pkt[4 + i] != pc.id[i]) return false;
+        return MessageDigest.isEqual(slice(hmac(pc.key, L_PULL, slice(pkt, 12, 28)), 0, 16), slice(pkt, 28, 44));
     }
 
     public static Item text(final String s) {
@@ -575,6 +609,10 @@ public final class Proto {
             for (Item it : items) total += Math.max(0, it.size());
             byte[] plain = new byte[CHUNK];
             for (Item it : items) {
+                if (it.options() >= 0) {
+                    tx.write(out, T_OPTS, new byte[]{(byte) it.options()});
+                    continue;
+                }
                 if (it.text() != null) {
                     tx.write(out, T_TEXT, it.text().getBytes(StandardCharsets.UTF_8));
                     continue;

@@ -140,12 +140,110 @@ public class AppTest {
                 Thread.sleep(50);
                 shadowOf(Looper.getMainLooper()).idle();
             }
-            assertEquals("Sees this phone · -48 dBm. Close enough: your last photo pops up.", seen.getText().toString());
+            assertEquals("Sees this phone · -48 dBm. Close enough: your newest photo pops up.", seen.getText().toString());
             assertEquals("Allowed", ((android.widget.TextView) d.findViewById(R.id.near_perm_detail)).getText().toString());
         } finally {
             pcSock.close();
             t.join(2000);
         }
+    }
+
+    @Test
+    public void deleteAfterPasteNeedsTwoYesesAndCancelLeavesItOff() {
+        Store.add(app, LINK);
+        MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
+        android.widget.Switch sw = a.findViewById(R.id.sw_delete);
+
+        a.findViewById(R.id.row_delete).performClick();
+        android.app.AlertDialog first = (android.app.AlertDialog) org.robolectric.shadows.ShadowDialog.getLatestDialog();
+        assertTrue(shadowOf(first).getMessage().toString().contains("copy something else"));
+        assertEquals(false, sw.isChecked());
+        first.getButton(android.content.DialogInterface.BUTTON_NEGATIVE).performClick();
+        shadowOf(Looper.getMainLooper()).idle();
+        assertEquals(false, Store.flag(app, Store.DELETE_AFTER_PASTE));
+        assertEquals(false, sw.isChecked());
+
+        a.findViewById(R.id.row_delete).performClick();
+        ((android.app.AlertDialog) org.robolectric.shadows.ShadowDialog.getLatestDialog()).getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick();
+        shadowOf(Looper.getMainLooper()).idle();
+        android.app.AlertDialog second = (android.app.AlertDialog) org.robolectric.shadows.ShadowDialog.getLatestDialog();
+        assertEquals("Are you sure?", shadowOf(second).getTitle().toString());
+        assertEquals("not on after only one yes", false, Store.flag(app, Store.DELETE_AFTER_PASTE));
+        second.getButton(android.content.DialogInterface.BUTTON_POSITIVE).performClick();
+        shadowOf(Looper.getMainLooper()).idle();
+        assertEquals(true, Store.flag(app, Store.DELETE_AFTER_PASTE));
+        assertEquals(true, sw.isChecked());
+
+        // Off needs no confirmation.
+        a.findViewById(R.id.row_delete).performClick();
+        assertEquals(false, Store.flag(app, Store.DELETE_AFTER_PASTE));
+    }
+
+    @Test
+    public void nearLinkSaysHelloAndAnswersOnlyAnAuthenticPull() throws Exception {
+        java.net.DatagramSocket pcSock;
+        try {
+            pcSock = new java.net.DatagramSocket(Proto.UDP_PORT, java.net.InetAddress.getByName("127.0.0.1"));
+        } catch (java.net.BindException e) {
+            org.junit.Assume.assumeTrue("UDP port in use by a running receiver", false);
+            return;
+        }
+        Store.add(app, LINK.replaceAll("&a=[^&]*", "") + "&a=127.0.0.1");
+        Proto.Pc pc = Store.pcs(app).get(0);
+        java.util.concurrent.atomic.AtomicInteger pulls = new java.util.concurrent.atomic.AtomicInteger();
+        NearLink link = new NearLink(app) {
+            @Override
+            void onPull(Proto.Pc p) {
+                pulls.incrementAndGet();
+            }
+        };
+        try {
+            pcSock.setSoTimeout(3000);
+            link.start();
+            byte[] b = new byte[64];
+            java.net.DatagramPacket hello = new java.net.DatagramPacket(b, b.length);
+            do { pcSock.receive(hello); } while (hello.getLength() != 44);
+            byte[] h = java.util.Arrays.copyOf(b, 44);
+            assertEquals("DCH1", new String(h, 0, 4, "US-ASCII"));
+            assertArrayEquals(java.util.Arrays.copyOfRange(Proto.hmac(pc.key, "dropcopy/v1/hello".getBytes("US-ASCII"), java.util.Arrays.copyOfRange(h, 12, 28)), 0, 16),
+                    java.util.Arrays.copyOfRange(h, 28, 44));
+
+            byte[] nonce = new byte[16];
+            new Random(1).nextBytes(nonce);
+            java.io.ByteArrayOutputStream forged = new java.io.ByteArrayOutputStream();
+            forged.write("DCU1".getBytes("US-ASCII"));
+            forged.write(pc.id);
+            forged.write(nonce);
+            forged.write(new byte[16]); // wrong tag
+            pcSock.send(new java.net.DatagramPacket(forged.toByteArray(), 44, hello.getSocketAddress()));
+            java.io.ByteArrayOutputStream real = new java.io.ByteArrayOutputStream();
+            real.write("DCU1".getBytes("US-ASCII"));
+            real.write(pc.id);
+            real.write(nonce);
+            real.write(Proto.hmac(pc.key, "dropcopy/v1/pull".getBytes("US-ASCII"), nonce), 0, 16);
+            for (int k = 0; k < 2; k++) pcSock.send(new java.net.DatagramPacket(real.toByteArray(), 44, hello.getSocketAddress()));
+            for (int k = 0; k < 40 && pulls.get() == 0; k++) Thread.sleep(50);
+            Thread.sleep(300);
+            assertEquals("one preview for a real pull sent twice; none for the forged one", 1, pulls.get());
+        } finally {
+            link.stop();
+            pcSock.close();
+        }
+    }
+
+    /** Against a real receiver (DROPCOPY_TEST_LINK, DROPCOPY_TEST_HOME): the PC lists the file for deletion. */
+    @Test
+    public void deleteAfterPasteReachesARealReceiver() throws Exception {
+        String link = System.getenv("DROPCOPY_TEST_LINK"), home = System.getenv("DROPCOPY_TEST_HOME");
+        assumeFalse("no live receiver configured", link == null || link.isEmpty() || home == null);
+        Store.add(app, link);
+        Store.setFlag(app, Store.DELETE_AFTER_PASTE, true);
+        File f = File.createTempFile("paste-me", ".jpg");
+        Files.write(f.toPath(), new byte[]{1, 2, 3});
+        Transfer.send(app, Collections.singletonList(Transfer.item(app, Uri.fromFile(f))), null, null);
+        Thread.sleep(300);
+        String list = new String(Files.readAllBytes(new File(home, "delete-pending.txt").toPath()), "UTF-8");
+        assertEquals("one file listed: " + list, 1, list.trim().split("\n").length);
     }
 
     @Test
@@ -253,7 +351,10 @@ public class AppTest {
             Thread.sleep(50);
             shadowOf(Looper.getMainLooper()).idle();
             File[] now = new File(dir).listFiles((d, n) -> n.startsWith("shared_"));
-            if (now != null && now.length > 0 && new File(dir).listFiles().length > countBefore) got = now[now.length - 1];
+            if (now != null && now.length > 0 && new File(dir).listFiles().length > countBefore) {
+                java.util.Arrays.sort(now, (x, y) -> Long.compare(y.lastModified(), x.lastModified()));
+                got = now[0]; // the newest: other live tests write here too
+            }
         }
         assertNotNull("file did not arrive on the PC; app said: " + org.robolectric.shadows.ShadowToast.getTextOfLatestToast(), got);
         assertArrayEquals(data, Files.readAllBytes(got.toPath()));

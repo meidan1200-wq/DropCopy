@@ -39,6 +39,18 @@ pub fn show(files: Vec<PathBuf>, heading: &'static str) {
     }
 }
 
+/// Shows a proximity preview. The files are temporary: deleted when the phone goes away unless
+/// they were dragged out or opened, and then an hour later (the app they went to may still read
+/// them).
+pub fn show_nearby(files: Vec<PathBuf>) {
+    if !files.is_empty() {
+        imp::show_temp(files);
+    }
+}
+
+/// How long a preview that was dragged or opened is kept for the app that got it.
+pub const USED_PREVIEW_KEPT: Duration = Duration::from_secs(3600);
+
 /// Shows the phone with the pairing code on its screen, for a phone that asked to pair. It stays
 /// up until a phone connects, it is closed, or a few minutes pass.
 pub fn show_code(link: String) {
@@ -59,6 +71,9 @@ pub fn check_drag_data(files: &[PathBuf]) -> Result<usize, String> {
 #[cfg(not(windows))]
 mod imp {
     pub fn show(_: Vec<std::path::PathBuf>, _: &'static str) {}
+    pub fn show_temp(files: Vec<std::path::PathBuf>) {
+        crate::cleanup::delete_later(files, std::time::Duration::ZERO);
+    }
     pub fn show_code(_: String) {}
     pub fn hide_code() {}
     pub fn check_drag_data(_: &[std::path::PathBuf]) -> Result<usize, String> {
@@ -103,6 +118,10 @@ mod imp {
         files: Vec<PathBuf>,
         /// Showing the pairing code: no drag, no open, no quick fade.
         code: bool,
+        /// A proximity preview, deleted when it goes (see `show_nearby`).
+        temp: bool,
+        /// Dragged out or opened: an app may still be reading it.
+        used: bool,
         normal: Bitmap,
         hover: Bitmap,
         close: (f32, f32, f32),
@@ -176,6 +195,7 @@ mod imp {
     struct Prepared {
         files: Vec<PathBuf>,
         code: bool,
+        temp: bool,
         normal: Art,
         hover: Art,
         scale: f32,
@@ -186,6 +206,14 @@ mod imp {
 
     /// Renders the phone off the UI thread, then hands it over.
     pub fn show(files: Vec<PathBuf>, _heading: &'static str) {
+        prepare(files, false);
+    }
+
+    pub fn show_temp(files: Vec<PathBuf>) {
+        prepare(files, true);
+    }
+
+    fn prepare(files: Vec<PathBuf>, temp: bool) {
         std::thread::spawn(move || {
             let Some(hwnd) = ui() else { return };
             let scale = unsafe { GetDpiForSystem() }.max(96) as f32 / 96.0;
@@ -193,7 +221,7 @@ mod imp {
             let n = files.len();
             let normal = phone_art::render(photo.as_ref(), scale, n, false);
             let hover = phone_art::render(photo.as_ref(), scale, n, true);
-            *PENDING.lock().unwrap() = Some(Prepared { files, code: false, normal, hover, scale });
+            *PENDING.lock().unwrap() = Some(Prepared { files, code: false, temp, normal, hover, scale });
             unsafe {
                 let _ = PostMessageW(HWND(hwnd as _), WM_APP_SHOW, WPARAM(0), LPARAM(0));
             }
@@ -209,7 +237,7 @@ mod imp {
             let scale = unsafe { GetDpiForSystem() }.max(96) as f32 / 96.0;
             let normal = phone_art::render_code(&modules, width, scale, false);
             let hover = phone_art::render_code(&modules, width, scale, true);
-            *PENDING.lock().unwrap() = Some(Prepared { files: vec![], code: true, normal, hover, scale });
+            *PENDING.lock().unwrap() = Some(Prepared { files: vec![], code: true, temp: false, normal, hover, scale });
             unsafe {
                 let _ = PostMessageW(HWND(hwnd as _), WM_APP_SHOW, WPARAM(0), LPARAM(0));
             }
@@ -370,6 +398,22 @@ mod imp {
         }
     }
 
+    fn mark_used() {
+        STATE.with(|s| {
+            if let Some(c) = s.borrow_mut().card.as_mut() {
+                c.used = true;
+            }
+        });
+    }
+
+    /// A preview that goes away is deleted now if nobody used it, else after a while.
+    fn release(card: &Card) {
+        if card.temp {
+            let after = if card.used { super::USED_PREVIEW_KEPT } else { std::time::Duration::ZERO };
+            crate::cleanup::delete_later(card.files.clone(), after);
+        }
+    }
+
     fn point(lp: LPARAM) -> POINT {
         POINT { x: (lp.0 & 0xffff) as i16 as i32, y: ((lp.0 >> 16) & 0xffff) as i16 as i32 }
     }
@@ -390,7 +434,10 @@ mod imp {
                 STATE.with(|s| {
                     let mut s = s.borrow_mut();
                     let was_up = matches!(s.phase, Phase::Shown);
-                    s.card = Some(Card { files: p.files, code: p.code, close: p.normal.close, scale: p.scale, normal, hover });
+                    if let Some(old) = s.card.take() {
+                        release(&old);
+                    }
+                    s.card = Some(Card { files: p.files, code: p.code, temp: p.temp, used: false, close: p.normal.close, scale: p.scale, normal, hover });
                     s.home = h;
                     s.hovered = false;
                     // Already up: swap the photo in place. Otherwise rise from the taskbar.
@@ -428,7 +475,9 @@ mod imp {
                             STATE.with(|s| {
                                 let mut s = s.borrow_mut();
                                 s.phase = Phase::Hidden;
-                                s.card = None; // frees the bitmaps
+                                if let Some(old) = s.card.take() {
+                                    release(&old); // and frees the bitmaps
+                                }
                             });
                         }
                     }
@@ -480,6 +529,7 @@ mod imp {
                         let _ = ReleaseCapture();
                         let files = STATE.with(|s| s.borrow().card.as_ref().map(|c| c.files.clone()));
                         if let Some(files) = files {
+                            mark_used();
                             drag(hwnd, &files);
                             start_hide(hwnd);
                         }
@@ -520,6 +570,7 @@ mod imp {
                         s.borrow().card.as_ref().filter(|c| !on_close(c, pt)).and_then(|c| c.files.first().cloned())
                     });
                     if let Some(f) = open {
+                        mark_used();
                         let w: Vec<u16> = f.as_os_str().encode_wide().chain(Some(0)).collect();
                         ShellExecuteW(None, w!("open"), PCWSTR(w.as_ptr()), None, None, SW_SHOWNORMAL);
                     }

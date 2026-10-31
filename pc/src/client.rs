@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 pub enum Item {
     File(PathBuf),
     Text(String),
+    /// `T_OPTS` flags for what follows (see `proto::OPT_*`).
+    Options(u8),
 }
 
 pub struct Sent {
@@ -92,6 +94,7 @@ pub fn send(cfg: &Config, target: Option<&str>, items: &[Item]) -> io::Result<Se
     for item in items {
         match item {
             Item::Text(t) => tx.write(&mut w, T_TEXT, t.as_bytes(), &mut buf)?,
+            Item::Options(f) => tx.write(&mut w, T_OPTS, &[*f], &mut buf)?,
             Item::File(path) => {
                 let mut f = File::open(path)?;
                 let size = f.metadata()?.len();

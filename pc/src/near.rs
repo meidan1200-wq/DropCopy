@@ -127,6 +127,27 @@ static STATE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(OFF
 static THRESHOLD: std::sync::atomic::AtomicI16 = std::sync::atomic::AtomicI16::new(-55);
 static LAST: std::sync::Mutex<Option<(f32, Instant)>> = std::sync::Mutex::new(None);
 
+/// Where the phone said it can be reached, and when.
+static PHONE: std::sync::Mutex<Option<(std::net::SocketAddr, Instant)>> = std::sync::Mutex::new(None);
+
+pub fn phone_is_at(addr: std::net::SocketAddr) {
+    *PHONE.lock().unwrap_or_else(|e| e.into_inner()) = Some((addr, Instant::now()));
+}
+
+/// The phone's address if it said hello in the last minute.
+pub fn phone() -> Option<std::net::SocketAddr> {
+    PHONE.lock().unwrap_or_else(|e| e.into_inner()).filter(|(_, t)| t.elapsed() < Duration::from_secs(60)).map(|(a, _)| a)
+}
+
+/// Asks the phone for its newest photo. False if it hasn't said where it is.
+pub fn pull(id: &[u8; 8], key: &[u8; 32]) -> bool {
+    let Some(addr) = phone() else { return false };
+    let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") else { return false };
+    let pkt = crate::proto::pull_packet(id, key, &crate::proto::random());
+    // Twice: Wi-Fi sometimes drops one.
+    sock.send_to(&pkt, addr).is_ok() | sock.send_to(&pkt, addr).is_ok()
+}
+
 pub fn status() -> Status {
     use std::sync::atomic::Ordering::Relaxed;
     let last = LAST.lock().unwrap_or_else(|e| e.into_inner()).map(|(s, t)| (s, t.elapsed()));

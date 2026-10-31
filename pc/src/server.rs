@@ -29,6 +29,10 @@ pub struct Received {
     pub files: Vec<PathBuf>,
     pub texts: Vec<String>,
     pub bytes: u64,
+    /// A proximity preview: saved to a temporary folder and shown on the taskbar phone only.
+    pub nearby: bool,
+    /// Delete the files once pasted, or once something else is copied.
+    pub delete_after_paste: bool,
 }
 
 pub struct Server {
@@ -79,11 +83,21 @@ impl Server {
                         // Only a phone holding the key gets this far: it is paired.
                         cfg.mark_paired();
                         crate::popup::hide_code();
-                        if !r.files.is_empty() {
-                            crate::popup::remember(&r.files);
-                            if popup {
-                                crate::popup::show(r.files.clone(), "From your phone");
+                        if r.nearby {
+                            // Brought close: show it on the little phone; nothing touches the clipboard.
+                            crate::cleanup::track(&r.files);
+                            if popup && !r.files.is_empty() {
+                                say!("  <- nearby preview from {peer}");
+                                crate::popup::show_nearby(r.files.clone());
+                            } else {
+                                crate::cleanup::delete_later(r.files.clone(), Duration::ZERO);
                             }
+                            return;
+                        }
+                        if r.delete_after_paste {
+                            crate::cleanup::track(&r.files);
+                        } else if !r.files.is_empty() {
+                            crate::popup::remember(&r.files);
                         }
                         report(&r, &peer, t0, clip, &lock)
                     }
@@ -105,6 +119,8 @@ fn discovery_loop(sock: UdpSocket, cfg: &Config, port: u16, pairing: bool) {
         let Ok((n, from)) = sock.recv_from(&mut buf) else { continue };
         if n == 28 && &buf[..4] == DISCOVER_MAGIC && buf[4..12] == cfg.id {
             let _ = sock.send_to(&reply_packet(&cfg.id, &cfg.key, &buf[12..28], port), from);
+        } else if is_hello(&buf[..n], &cfg.id, &cfg.key) {
+            crate::near::phone_is_at(from);
         } else if n == 28 && &buf[..4] == NEAR_ASK_MAGIC && buf[4..12] == cfg.id {
             let _ = sock.send_to(&near_answer(&cfg.id, &cfg.key, &buf[12..28], &crate::near::status()), from);
         } else if n == 4 && &buf[..4] == STOP_MAGIC && from.ip().is_loopback() {
@@ -151,10 +167,13 @@ fn report(r: &Received, peer: &str, t0: Instant, clip: ClipMode, lock: &Mutex<()
     let result = if let Some(text) = r.texts.last().filter(|_| r.files.is_empty()) {
         clipboard::set_text(text)
     } else if !r.files.is_empty() {
-        clipboard::set_files(&r.files, clip)
+        clipboard::set_files(&r.files, clip, r.delete_after_paste)
     } else {
         Ok(())
     };
+    if r.delete_after_paste && !r.files.is_empty() {
+        say!("     deleted from this PC once pasted, or when something else is copied");
+    }
     match result {
         Ok(()) => say!("     on the clipboard - Ctrl+V to paste ({} ms)", t1.elapsed().as_millis()),
         Err(e) => say!("  ! clipboard: {e} (the file is saved)"),
@@ -216,14 +235,15 @@ fn receive(
                     return Err(proto_err("new file before the previous one ended"));
                 }
                 let h = parse_file_header(body)?;
-                fs::create_dir_all(&cfg.save_dir)?;
+                let dir = if got.nearby { crate::cleanup::nearby_dir(&cfg.home) } else { cfg.save_dir.clone() };
+                fs::create_dir_all(&dir)?;
                 let mut name = sanitize_filename(&h.name);
                 if std::path::Path::new(&name).extension().is_none() {
                     if let Some(ext) = crate::util::ext_for_mime(&h.mime) {
                         name = format!("{name}.{ext}");
                     }
                 }
-                let tmp = cfg.save_dir.join(format!(".{name}.{}.part", crate::util::hex(&random::<4>())));
+                let tmp = dir.join(format!(".{name}.{}.part", crate::util::hex(&random::<4>())));
                 *part = Some((File::create(&tmp)?, tmp, name));
             }
             T_DATA => {
@@ -234,11 +254,16 @@ fn receive(
             T_FILE_END => {
                 let (f, tmp, name) = part.take().ok_or_else(|| proto_err("file end outside a file"))?;
                 drop(f);
-                let dest = unique_path(&cfg.save_dir, &name);
+                let dest = unique_path(tmp.parent().unwrap_or(&cfg.save_dir), &name);
                 fs::rename(&tmp, &dest)?;
                 got.files.push(std::path::absolute(&dest).unwrap_or(dest));
             }
             T_TEXT => got.texts.push(String::from_utf8_lossy(body).into_owned()),
+            T_OPTS => {
+                let flags = body.first().copied().unwrap_or(0);
+                got.nearby = flags & OPT_NEARBY != 0;
+                got.delete_after_paste = flags & OPT_DELETE_AFTER_PASTE != 0;
+            }
             T_END => {
                 if part.is_some() {
                     return Err(proto_err("transfer ended inside a file"));

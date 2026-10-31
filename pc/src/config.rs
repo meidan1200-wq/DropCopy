@@ -27,7 +27,7 @@ pub struct Config {
 
 /// Every setting `dropcopy set` accepts, with its meaning, for the help text.
 pub const SETTINGS: &[(&str, &str)] = &[
-    ("popup", "on|off   the phone above the taskbar: new photos, and the pairing code when a phone asks"),
+    ("popup", "on|off   the phone above the taskbar: the photo when the phone comes close, and the pairing code"),
     ("near", "on|off   show the latest photo when the phone is brought close (Bluetooth)"),
     ("near_rssi", "-30..-90 how close counts as close (default -55; see `dropcopy near`)"),
     ("auto_update", "on|off   install new versions automatically"),

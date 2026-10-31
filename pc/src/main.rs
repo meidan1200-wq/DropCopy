@@ -53,6 +53,8 @@ struct Args {
     invert: bool,
     hidden: bool,
     background: bool,
+    /// `send`: T_OPTS flags, for trying the phone's options from a terminal (`--opts 2`).
+    opts: Option<u8>,
 }
 
 fn parse() -> Result<Args, String> {
@@ -69,6 +71,7 @@ fn parse() -> Result<Args, String> {
         invert: false,
         hidden: false,
         background: false,
+        opts: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -85,6 +88,7 @@ fn parse() -> Result<Args, String> {
             "--png" => a.png = true,
             "--invert" => a.invert = true,
             "--hidden" => a.hidden = true,
+            "--opts" => a.opts = Some(value("--opts")?.parse().map_err(|_| "--opts needs a number")?),
             "--background" => a.background = true,
             s if s.starts_with("--") => return Err(format!("unknown option {s}")),
             _ if a.cmd.is_none() => a.cmd = Some(arg),
@@ -259,6 +263,7 @@ fn serve(cfg: Config, a: &Args) -> Result<(), String> {
     }
     let cfg = Arc::new(cfg);
     dropcopy::update::cleanup();
+    dropcopy::cleanup::init(&cfg.home);
     let opts = || ServeOpts { port: a.port, clip: a.clip, discovery: true, popup: cfg.popup, pairing: cfg.popup };
     let mut bound = Server::bind(cfg.clone(), opts());
     // Just restarted by an update: the old copy may still be letting go of the port.
@@ -290,11 +295,17 @@ fn serve(cfg: Config, a: &Args) -> Result<(), String> {
     say!("  Waiting for your phone... (Ctrl+C to stop)\n");
     setup::warn_if_public_network();
     if cfg.near && cfg.popup {
-        dropcopy::near::watch(cfg.key, cfg.near_rssi, |r| {
+        let me = cfg.clone();
+        dropcopy::near::watch(cfg.key, cfg.near_rssi, move |r| {
+            let cfg = &me;
             if r.came_near {
                 say!("  phone nearby ({:.0} dBm)", r.smoothed);
-                if let Some(files) = dropcopy::popup::latest() {
-                    dropcopy::popup::show(files, "Nearby");
+                // It sends its newest photo, which then shows on the taskbar phone. A phone too old
+                // to answer gets the last photo it sent instead.
+                if !dropcopy::near::pull(&cfg.id, &cfg.key) {
+                    if let Some(files) = dropcopy::popup::latest() {
+                        dropcopy::popup::show(files, "Nearby");
+                    }
                 }
             }
         });
@@ -390,7 +401,8 @@ fn near_diagnostic(cfg: &Config) -> Result<(), String> {
 }
 
 fn send(cfg: &mut Config, a: &Args) -> Result<(), String> {
-    let mut items: Vec<Item> = a.texts.iter().cloned().map(Item::Text).collect();
+    let mut items: Vec<Item> = a.opts.map(Item::Options).into_iter().collect();
+    items.extend(a.texts.iter().cloned().map(Item::Text));
     for f in &a.rest {
         let p = PathBuf::from(f);
         if !p.is_file() {

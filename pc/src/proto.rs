@@ -23,6 +23,12 @@ pub const PAIR_ANSWER_MAGIC: &[u8; 4] = b"DCA1";
 pub const NEAR_ASK_MAGIC: &[u8; 4] = b"DCN1";
 pub const NEAR_ANSWER_MAGIC: &[u8; 4] = b"DCM1";
 const L_NEARQ: &[u8] = b"dropcopy/v1/nearq";
+/// The phone, while proximity is on and its screen is on, telling the PC where to reach it, and
+/// the PC asking it to send its newest photo because it just came close.
+pub const HELLO_MAGIC: &[u8; 4] = b"DCH1";
+pub const PULL_MAGIC: &[u8; 4] = b"DCU1";
+const L_HELLO: &[u8] = b"dropcopy/v1/hello";
+const L_PULL: &[u8] = b"dropcopy/v1/pull";
 /// From this machine only: a newer copy asking the running one to quit so it can take over.
 pub const STOP_MAGIC: &[u8; 4] = b"DCS1";
 pub const TCP_PORT: u16 = 48650;
@@ -39,6 +45,10 @@ pub const T_DATA: u8 = 0x02; // raw bytes of the current file
 pub const T_FILE_END: u8 = 0x03; // current file is complete
 pub const T_TEXT: u8 = 0x04; // utf-8 text for the clipboard
 pub const T_END: u8 = 0x05; // sender is done
+pub const T_OPTS: u8 = 0x06; // flags u8, before any file: how to treat this transfer
+/// `T_OPTS` flags.
+pub const OPT_NEARBY: u8 = 0x01; // a proximity preview: temporary, shown on the taskbar phone only
+pub const OPT_DELETE_AFTER_PASTE: u8 = 0x02; // remove the file once pasted (or the clipboard moves on)
 pub const T_OK: u8 = 0x10; // count u16
 pub const T_ERR: u8 = 0x11; // utf-8 message
 
@@ -227,6 +237,23 @@ pub fn near_answer(id: &[u8; 8], key: &[u8; 32], nonce: &[u8], st: &crate::near:
     p.extend_from_slice(&body);
     p.extend_from_slice(&hmac(key, &[L_NEARQ, nonce, &body])[..16]);
     p
+}
+
+/// "DCH1" | id[8] | nonce[16] | HMAC(K, "dropcopy/v1/hello" | nonce)[..16]  (44 bytes)
+pub fn is_hello(pkt: &[u8], id: &[u8; 8], key: &[u8; 32]) -> bool {
+    pkt.len() == 44
+        && &pkt[..4] == HELLO_MAGIC
+        && &pkt[4..12] == id
+        && ct_eq(&pkt[28..44], &hmac(key, &[L_HELLO, &pkt[12..28]])[..16])
+}
+
+pub fn hello_packet(id: &[u8; 8], key: &[u8; 32], nonce: &[u8; 16]) -> Vec<u8> {
+    [HELLO_MAGIC.as_slice(), id, nonce, &hmac(key, &[L_HELLO, nonce])[..16]].concat()
+}
+
+/// "DCU1" | id[8] | nonce[16] | HMAC(K, "dropcopy/v1/pull" | nonce)[..16]  (44 bytes)
+pub fn pull_packet(id: &[u8; 8], key: &[u8; 32], nonce: &[u8; 16]) -> Vec<u8> {
+    [PULL_MAGIC.as_slice(), id, nonce, &hmac(key, &[L_PULL, nonce])[..16]].concat()
 }
 
 /// Returns the TCP port if `pkt` is a genuine reply to `nonce` from the PC `id`.

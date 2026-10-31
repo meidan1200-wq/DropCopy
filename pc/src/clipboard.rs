@@ -94,9 +94,17 @@ pub fn set_text(text: &str) -> Result<(), String> {
     imp::set_text(text)
 }
 
-pub fn set_files(files: &[PathBuf], mode: ClipMode) -> Result<(), String> {
-    imp::set_files(files, mode)
+/// Puts files on the clipboard. With `delete_after_paste` they are deleted from disk shortly after
+/// the first paste, or as soon as something else is copied (see `PROTOCOL.md`, T_OPTS).
+pub fn set_files(files: &[PathBuf], mode: ClipMode, delete_after_paste: bool) -> Result<(), String> {
+    imp::set_files(files, mode, delete_after_paste)
 }
+
+/// After a paste, a file pasted *as a file* (into a folder, an upload box) is read by that app a
+/// moment later, so it stays this long.
+pub const KEEP_AFTER_PASTE: std::time::Duration = std::time::Duration::from_secs(30);
+/// After something else is copied.
+pub const KEEP_AFTER_REPLACED: std::time::Duration = std::time::Duration::from_secs(5);
 
 #[cfg(windows)]
 mod imp {
@@ -203,6 +211,9 @@ mod imp {
 
     struct Job {
         formats: Vec<(u32, Vec<u8>)>,
+        /// Announced now, handed over only when an app asks: that is how a paste is noticed.
+        lazy: Vec<(u32, Vec<u8>)>,
+        delete: Option<Vec<PathBuf>>,
         delayed_dib: Option<Arc<Pending>>,
         reply: Sender<Result<(), String>>,
     }
@@ -215,6 +226,23 @@ mod imp {
     thread_local! {
         static JOBS: RefCell<Option<std::sync::mpsc::Receiver<Job>>> = const { RefCell::new(None) };
         static PENDING: RefCell<Option<Arc<Pending>>> = const { RefCell::new(None) };
+        static LAZY: RefCell<Vec<(u32, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
+        static DELETE: RefCell<Option<Vec<PathBuf>>> = const { RefCell::new(None) };
+    }
+
+    fn render_lazy(format: Option<u32>) {
+        LAZY.with(|l| {
+            for (f, b) in l.borrow().iter().filter(|(f, _)| format.is_none_or(|want| want == *f)) {
+                let _ = put(*f, Some(b));
+            }
+        });
+    }
+
+    /// The files of a "delete after paste" transfer go once `after` has passed.
+    fn release_files(after: Duration) {
+        if let Some(files) = DELETE.with(|d| d.borrow_mut().take()) {
+            crate::cleanup::delete_later(files, after);
+        }
     }
 
     fn render_dib() {
@@ -237,6 +265,9 @@ mod imp {
                             for (f, b) in &job.formats {
                                 put(*f, Some(b))?;
                             }
+                            for (f, _) in &job.lazy {
+                                put(*f, None)?;
+                            }
                             if job.delayed_dib.is_some() {
                                 put(CF_DIB, None)?;
                             }
@@ -245,14 +276,22 @@ mod imp {
                         CloseClipboard();
                         r
                     });
+                    // (EmptyClipboard above already let go of the previous transfer's files.)
                     PENDING.with(|s| *s.borrow_mut() = job.delayed_dib);
+                    LAZY.with(|l| *l.borrow_mut() = job.lazy);
+                    DELETE.with(|d| *d.borrow_mut() = job.delete);
                     let _ = job.reply.send(result);
                 }
                 0
             }
             // An app is pasting the bitmap: the clipboard is already open for us.
-            WM_RENDERFORMAT if wp as u32 == CF_DIB => {
-                render_dib();
+            WM_RENDERFORMAT => {
+                if wp as u32 == CF_DIB {
+                    render_dib();
+                } else {
+                    render_lazy(Some(wp as u32));
+                }
+                release_files(super::KEEP_AFTER_PASTE);
                 0
             }
             // We are going away while still owning the clipboard: render now or it is lost.
@@ -260,6 +299,7 @@ mod imp {
                 if OpenClipboard(hwnd) != 0 {
                     if GetClipboardOwner() == hwnd {
                         render_dib();
+                        render_lazy(None);
                     }
                     CloseClipboard();
                 }
@@ -268,6 +308,8 @@ mod imp {
             // Something else was copied: drop the bitmap we were holding.
             WM_DESTROYCLIPBOARD => {
                 PENDING.with(|s| s.borrow_mut().take());
+                LAZY.with(|l| l.borrow_mut().clear());
+                release_files(super::KEEP_AFTER_REPLACED);
                 0
             }
             _ => DefWindowProcW(hwnd, msg, wp, lp),
@@ -322,10 +364,15 @@ mod imp {
             .map_err(|e| e.clone())
     }
 
-    fn submit(formats: Vec<(u32, Vec<u8>)>, delayed_dib: Option<Arc<Pending>>) -> Result<(), String> {
+    fn submit(
+        formats: Vec<(u32, Vec<u8>)>,
+        lazy: Vec<(u32, Vec<u8>)>,
+        delete: Option<Vec<PathBuf>>,
+        delayed_dib: Option<Arc<Pending>>,
+    ) -> Result<(), String> {
         let o = owner()?;
         let (reply, result) = channel();
-        o.jobs.lock().unwrap().send(Job { formats, delayed_dib, reply }).map_err(|e| e.to_string())?;
+        o.jobs.lock().unwrap().send(Job { formats, lazy, delete, delayed_dib, reply }).map_err(|e| e.to_string())?;
         if unsafe { PostMessageW(o.hwnd as HWND, WM_APP_JOB, 0, 0) } == 0 {
             return Err("cannot reach the clipboard thread".into());
         }
@@ -352,7 +399,7 @@ mod imp {
         v
     }
 
-    pub fn set_files(files: &[PathBuf], mode: ClipMode) -> Result<(), String> {
+    pub fn set_files(files: &[PathBuf], mode: ClipMode, delete_after_paste: bool) -> Result<(), String> {
         let mut formats = vec![];
         let mut delayed = None;
         if mode != ClipMode::File && files.len() == 1 && is_image(&files[0]) {
@@ -379,12 +426,17 @@ mod imp {
             formats.push((CF_HDROP, hdrop(files)));
             formats.push((register("Preferred DropEffect"), 1u32.to_le_bytes().to_vec())); // DROPEFFECT_COPY
         }
-        submit(formats, delayed)
+        if delete_after_paste {
+            // Every format on demand, so the first paste of any kind is noticed.
+            submit(vec![], formats, Some(files.to_vec()), delayed)
+        } else {
+            submit(formats, vec![], None, delayed)
+        }
     }
 
     pub fn set_text(text: &str) -> Result<(), String> {
         let w: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
-        submit(vec![(CF_UNICODETEXT, wide_bytes(&w))], None)
+        submit(vec![(CF_UNICODETEXT, wide_bytes(&w))], vec![], None, None)
     }
 }
 
@@ -432,7 +484,11 @@ mod imp {
         put("text/plain;charset=utf-8", text.as_bytes()).or_else(|_| put("UTF8_STRING", text.as_bytes()))
     }
 
-    pub fn set_files(files: &[PathBuf], mode: ClipMode) -> Result<(), String> {
+    pub fn set_files(files: &[PathBuf], mode: ClipMode, delete_after_paste: bool) -> Result<(), String> {
+        if delete_after_paste {
+            // No paste to notice here: the clipboard tools copy the bytes, so the file can go soon.
+            crate::cleanup::delete_later(files.to_vec(), super::KEEP_AFTER_PASTE);
+        }
         let single_image = files.len() == 1 && is_image(&files[0]) && mode != ClipMode::File;
         if cfg!(target_os = "macos") {
             let p = files[0].display().to_string().replace('"', "\\\"");

@@ -99,6 +99,8 @@ final class Store {
 
     static final String AUTO_UPDATE = "auto_update";
     static final String NEAR = "near";
+    /** Pictures are deleted from the PC once pasted (or when something else is copied there). */
+    static final String DELETE_AFTER_PASTE = "delete_after_paste";
     static final String WATCH_SCREENSHOTS = "watch_screenshots";
     static final String WATCH_CAMERA = "watch_camera";
 }

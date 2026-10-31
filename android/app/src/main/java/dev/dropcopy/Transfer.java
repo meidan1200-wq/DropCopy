@@ -71,8 +71,27 @@ final class Transfer {
         if (pcHex != null) pcs.removeIf(p -> !p.hexId().equals(pcHex));
         if (pcs.isEmpty()) throw new IOException("Pair your PC first: open DropCopy");
 
-        Proto.Result r = Proto.send(pcs, Proto.broadcastAddresses(), routes(c), items, progress);
+        boolean hasOptions = false, hasFile = false;
+        for (Proto.Item it : items) {
+            hasOptions |= it.options() >= 0;
+            hasFile |= it.options() < 0 && it.text() == null;
+        }
+        List<Proto.Item> toSend = items;
+        if (!hasOptions && hasFile && Store.flag(c, Store.DELETE_AFTER_PASTE)) {
+            toSend = new ArrayList<>(items);
+            toSend.add(0, Proto.options(Proto.OPT_DELETE_AFTER_PASTE));
+        }
+        Proto.Result r;
+        try {
+            r = Proto.send(pcs, Proto.broadcastAddresses(), routes(c), toSend, progress);
+        } catch (IOException e) {
+            // A PC from before v0.3.3 refuses the options record: send plainly rather than fail.
+            if (toSend == items || e.getMessage() == null || !e.getMessage().contains("unknown record type")) throw e;
+            r = Proto.send(pcs, Proto.broadcastAddresses(), routes(c), items, progress);
+        }
         Store.remember(c, r.pc);
+        items = new ArrayList<>(items);
+        items.removeIf(it -> it.options() >= 0);
         if (items.isEmpty()) return "Connected to " + r.pc.name + " (" + r.totalMillis + " ms)";
         String what = items.size() == 1 ? (items.get(0).text() != null ? "Text" : items.get(0).name()) : items.size() + " items";
         return what + " → " + r.pc.name + " · " + human(r.bytes) + " · " + r.totalMillis + " ms";

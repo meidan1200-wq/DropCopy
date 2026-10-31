@@ -47,6 +47,17 @@ PC    → phone        "DCM1" | id[8] | body[7] | HMAC-SHA256(K, "dropcopy/v1/ne
 
 Polled about once a second while the phone's proximity setup window is open, to show a live signal meter.
 
+### Proximity: "here I am" and "send your newest photo"
+
+```
+phone → PC/broadcast "DCH1" | id[8] | nonce[16] | HMAC-SHA256(K, "dropcopy/v1/hello" | nonce)[0..16]   (44 bytes)
+PC    → phone        "DCU1" | id[8] | nonce[16] | HMAC-SHA256(K, "dropcopy/v1/pull"  | nonce)[0..16]   (44 bytes)
+```
+
+While proximity is on and its screen is on, the phone says hello every 15 s from the socket it listens on.
+When Bluetooth shows it came close, the PC sends a pull to that address (twice), and the phone answers with
+an ordinary transfer: OPTS 0x01, then its newest image.
+
 ### Stopping the running copy (same machine only)
 
 ```
@@ -79,6 +90,7 @@ Plaintext = `type u8 | body`:
 | 0x03 | FILE_END | — |
 | 0x04 | TEXT | UTF-8, for the clipboard |
 | 0x05 | END | — sender is done |
+| 0x06 | OPTS | flags u8, before any file: 0x01 nearby preview (temporary, shown on the taskbar phone, not on the clipboard), 0x02 delete from the PC after pasting |
 | 0x10 | OK | count u16 (PC → phone) |
 | 0x11 | ERR | UTF-8 message (PC → phone) |
 
