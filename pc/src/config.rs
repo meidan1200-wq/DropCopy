@@ -7,6 +7,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+#[derive(Clone)]
 pub struct Config {
     pub home: PathBuf,
     pub id: [u8; 8],

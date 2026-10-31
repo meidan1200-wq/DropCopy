@@ -294,6 +294,11 @@ fn serve(cfg: Config, a: &Args) -> Result<(), String> {
     }
     say!("  Waiting for your phone... (Ctrl+C to stop)\n");
     setup::warn_if_public_network();
+    dropcopy::tray::start(dropcopy::tray::Info {
+        name: cfg.name.clone(),
+        save_dir: cfg.save_dir.clone(),
+        link: pair::link(&cfg, server.port),
+    });
     if cfg.near && cfg.popup {
         let me = cfg.clone();
         dropcopy::near::watch(cfg.key, cfg.near_rssi, move |r| {

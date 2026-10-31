@@ -42,6 +42,7 @@ pub struct Server {
     clip: ClipMode,
     clip_lock: Arc<Mutex<()>>,
     popup: bool,
+    active: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Server {
@@ -59,7 +60,7 @@ impl Server {
             }
             Err(e) => say!("  ! discovery port {UDP_PORT} unavailable ({e}); phones will use the last known address"),
         }
-        Ok(Server { listener, port, cfg, clip: opts.clip, clip_lock: Arc::new(Mutex::new(())), popup: opts.popup })
+        Ok(Server { listener, port, cfg, clip: opts.clip, clip_lock: Arc::new(Mutex::new(())), popup: opts.popup, active: Arc::default() })
     }
 
     pub fn run(self) -> io::Result<()> {
@@ -71,11 +72,25 @@ impl Server {
                     continue;
                 }
             };
+            use std::sync::atomic::Ordering::SeqCst;
+            if self.active.fetch_add(1, SeqCst) >= MAX_CONNECTIONS {
+                self.active.fetch_sub(1, SeqCst);
+                drop(stream);
+                continue;
+            }
+            let active = self.active.clone();
             let cfg = self.cfg.clone();
             let clip = self.clip;
             let lock = self.clip_lock.clone();
             let popup = self.popup;
             thread::spawn(move || {
+                struct Slot(Arc<std::sync::atomic::AtomicUsize>);
+                impl Drop for Slot {
+                    fn drop(&mut self) {
+                        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+                let _slot = Slot(active);
                 let peer = stream.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
                 let t0 = Instant::now();
                 match handle(stream, &cfg) {
@@ -141,6 +156,11 @@ fn discovery_loop(sock: UdpSocket, cfg: &Config, port: u16, pairing: bool) {
     }
 }
 
+const HELLO_TIMEOUT: Duration = Duration::from_secs(4);
+/// Connections handled at once; more are closed straight away, so a flood from the network
+/// cannot use up threads and memory. Far above what phones ever need.
+const MAX_CONNECTIONS: usize = 256;
+
 /// How long after showing the pairing code further requests only get an answer. Anyone on the
 /// network can ask, so this also keeps a noisy device from flashing the code over and over.
 const PAIR_ASK_QUIET: Duration = Duration::from_secs(20);
@@ -183,7 +203,8 @@ fn report(r: &Received, peer: &str, t0: Instant, clip: ClipMode, lock: &Mutex<()
 /// Runs one transfer. Partial files are removed if the transfer does not finish.
 pub fn handle(stream: TcpStream, cfg: &Config) -> io::Result<Received> {
     stream.set_nodelay(true)?;
-    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    // A phone says hello at once; something that connects and stays silent is let go quickly.
+    stream.set_read_timeout(Some(HELLO_TIMEOUT))?;
     let mut w = stream.try_clone()?;
     let mut r = BufReader::with_capacity(256 * 1024, stream);
     let (mut rx, mut tx) = server_handshake(&mut r, &mut w, &cfg.key).map_err(|e| {
@@ -193,6 +214,7 @@ pub fn handle(stream: TcpStream, cfg: &Config) -> io::Result<Received> {
             e
         }
     })?;
+    r.get_ref().set_read_timeout(Some(Duration::from_secs(30)))?;
 
     let mut part: Option<(File, PathBuf, String)> = None;
     let result = receive(&mut r, &mut rx, cfg, &mut part);

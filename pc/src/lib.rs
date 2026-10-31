@@ -38,5 +38,6 @@ pub mod popup;
 pub mod pair;
 pub mod proto;
 pub mod server;
+pub mod tray;
 pub mod update;
 pub mod util;
