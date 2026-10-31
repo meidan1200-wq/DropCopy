@@ -40,6 +40,67 @@ public class AppTest {
     private final Application app = RuntimeEnvironment.getApplication();
 
     @Test
+    public void askingToPairGetsThePcNameFromItsAnswer() throws Exception {
+        java.net.DatagramSocket pc;
+        try {
+            pc = new java.net.DatagramSocket(Proto.UDP_PORT, java.net.InetAddress.getByName("127.0.0.1"));
+        } catch (java.net.BindException e) {
+            org.junit.Assume.assumeTrue("UDP port in use by a running receiver", false);
+            return;
+        }
+        Thread t = new Thread(() -> {
+            try {
+                byte[] b = new byte[64];
+                java.net.DatagramPacket p = new java.net.DatagramPacket(b, b.length);
+                pc.receive(p);
+                assertEquals(12, p.getLength());
+                assertEquals("DCQ1", new String(b, 0, 4, "US-ASCII"));
+                byte[] ans = new byte[12 + 15];
+                System.arraycopy("DCA1".getBytes("US-ASCII"), 0, ans, 0, 4);
+                System.arraycopy(b, 4, ans, 4, 8);
+                System.arraycopy("DESKTOP-4E1E3TB".getBytes("UTF-8"), 0, ans, 12, 15);
+                pc.send(new java.net.DatagramPacket(ans, ans.length, p.getSocketAddress()));
+            } catch (Exception ignored) { }
+        });
+        t.start();
+        try {
+            String name = Proto.askToPair(Collections.singletonList(java.net.InetAddress.getByName("127.0.0.1")), 2000);
+            assertEquals("DESKTOP-4E1E3TB", name);
+        } finally {
+            t.join(3000);
+            pc.close();
+        }
+        // An answer to some other question is ignored.
+        byte[] nonce = new byte[8];
+        byte[] other = "DCA1\u0001\u0001\u0001\u0001\u0001\u0001\u0001\u0001PC".getBytes("ISO-8859-1");
+        assertEquals(null, Proto.parsePairAnswer(other, nonce));
+    }
+
+    @Test
+    public void pairedPhoneListsOnlyTheSettingsStillMissing() {
+        Store.add(app, LINK);
+        Store.setFlag(app, Store.WATCH_SCREENSHOTS, true);
+        MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
+        assertEquals(android.view.View.VISIBLE, a.findViewById(R.id.needs_card).getVisibility());
+        assertEquals(android.view.View.VISIBLE, a.findViewById(R.id.row_ok_battery).getVisibility());
+        // The first visible row has no divider above it.
+        assertEquals(android.view.View.GONE, a.findViewById(R.id.row_ok_battery_div).getVisibility());
+
+        // Battery allowed: that row goes; the card stays for what is still missing.
+        org.robolectric.shadows.ShadowPowerManager pm = shadowOf(app.getSystemService(android.os.PowerManager.class));
+        pm.setIgnoringBatteryOptimizations(app.getPackageName(), true);
+        a.recreate();
+        a = Robolectric.buildActivity(MainActivity.class).setup().get();
+        assertEquals(android.view.View.GONE, a.findViewById(R.id.row_ok_battery).getVisibility());
+    }
+
+    @Test
+    public void unpairedPhoneShowsNoSettingsYet() {
+        MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
+        assertEquals(android.view.View.GONE, a.findViewById(R.id.needs_card).getVisibility());
+    }
+
+    @Test
     public void pairingLinkOpensAppStoresPcAndPublishesShareIcon() {
         Intent open = new Intent(Intent.ACTION_VIEW, Uri.parse(LINK));
         Robolectric.buildActivity(MainActivity.class, open).setup();

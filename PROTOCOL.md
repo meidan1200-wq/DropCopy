@@ -25,6 +25,25 @@ reply cannot be forged without K. The phone sends to every interface's broadcast
 at 100, 200, 400, 800 ms…, while *simultaneously* opening TCP to the last known address. First connection wins;
 the others are closed before sending anything (the PC ignores them silently).
 
+### Asking for the pairing code (unpaired phone)
+
+```
+phone → broadcast   "DCQ1" | nonce[8]                                         (12 bytes)
+PC    → phone       "DCA1" | nonce[8] | name (utf-8, ≤ 64 bytes)
+```
+
+A phone with no pairing (or whose PC no longer answers its id) asks; every PC that hears it answers with its
+name and shows the pairing QR code on its own screen, at most once per 20 s. Nothing secret crosses the network:
+the key only ever travels in the QR code. The PC takes the code down when a phone connects with the key.
+
+### Stopping the running copy (same machine only)
+
+```
+local → 127.0.0.1   "DCS1"                                                    (4 bytes)
+```
+
+Sent by a newer copy that is installing itself; the PC accepts it only from a loopback address and exits.
+
 ## Transfer — TCP port 48650
 
 ```

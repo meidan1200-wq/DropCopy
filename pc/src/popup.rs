@@ -39,6 +39,17 @@ pub fn show(files: Vec<PathBuf>, heading: &'static str) {
     }
 }
 
+/// Shows the phone with the pairing code on its screen, for a phone that asked to pair. It stays
+/// up until a phone connects, it is closed, or a few minutes pass.
+pub fn show_code(link: String) {
+    imp::show_code(link);
+}
+
+/// Takes the pairing code down (a phone just connected with the key).
+pub fn hide_code() {
+    imp::hide_code();
+}
+
 /// Builds the drag data exactly as a drag from the phone would, and reads the file list back out.
 /// Returns how many files a drop target would receive.
 pub fn check_drag_data(files: &[PathBuf]) -> Result<usize, String> {
@@ -48,6 +59,8 @@ pub fn check_drag_data(files: &[PathBuf]) -> Result<usize, String> {
 #[cfg(not(windows))]
 mod imp {
     pub fn show(_: Vec<std::path::PathBuf>, _: &'static str) {}
+    pub fn show_code(_: String) {}
+    pub fn hide_code() {}
     pub fn check_drag_data(_: &[std::path::PathBuf]) -> Result<usize, String> {
         Err("drag and drop is only available on Windows".into())
     }
@@ -75,6 +88,9 @@ mod imp {
     use windows::Win32::UI::WindowsAndMessaging::*;
 
     const WM_APP_SHOW: u32 = WM_APP + 2;
+    const WM_APP_HIDE_CODE: u32 = WM_APP + 3;
+    /// The pairing code stays up this long unless a phone connects first.
+    const CODE_FOR_MS: u32 = 3 * 60 * 1000;
     const WM_MOUSELEAVE: u32 = 0x02A3;
     const TIMER_ANIM: usize = 1;
     const TIMER_HIDE: usize = 2;
@@ -85,6 +101,8 @@ mod imp {
     /// A rendered phone, in both states, ready to put on screen.
     struct Card {
         files: Vec<PathBuf>,
+        /// Showing the pairing code: no drag, no open, no quick fade.
+        code: bool,
         normal: Bitmap,
         hover: Bitmap,
         close: (f32, f32, f32),
@@ -157,6 +175,7 @@ mod imp {
 
     struct Prepared {
         files: Vec<PathBuf>,
+        code: bool,
         normal: Art,
         hover: Art,
         scale: f32,
@@ -174,11 +193,36 @@ mod imp {
             let n = files.len();
             let normal = phone_art::render(photo.as_ref(), scale, n, false);
             let hover = phone_art::render(photo.as_ref(), scale, n, true);
-            *PENDING.lock().unwrap() = Some(Prepared { files, normal, hover, scale });
+            *PENDING.lock().unwrap() = Some(Prepared { files, code: false, normal, hover, scale });
             unsafe {
                 let _ = PostMessageW(HWND(hwnd as _), WM_APP_SHOW, WPARAM(0), LPARAM(0));
             }
         });
+    }
+
+    pub fn show_code(link: String) {
+        std::thread::spawn(move || {
+            let Some(hwnd) = ui() else { return };
+            let Ok(qr) = qrcode::QrCode::with_error_correction_level(link.as_bytes(), qrcode::EcLevel::L) else { return };
+            let width = qr.width();
+            let modules: Vec<bool> = qr.to_colors().into_iter().map(|c| c == qrcode::Color::Dark).collect();
+            let scale = unsafe { GetDpiForSystem() }.max(96) as f32 / 96.0;
+            let normal = phone_art::render_code(&modules, width, scale, false);
+            let hover = phone_art::render_code(&modules, width, scale, true);
+            *PENDING.lock().unwrap() = Some(Prepared { files: vec![], code: true, normal, hover, scale });
+            unsafe {
+                let _ = PostMessageW(HWND(hwnd as _), WM_APP_SHOW, WPARAM(0), LPARAM(0));
+            }
+        });
+    }
+
+    pub fn hide_code() {
+        // Never starts the UI thread just to hide something that was never shown.
+        if let Some(Some(hwnd)) = UI.get() {
+            unsafe {
+                let _ = PostMessageW(HWND(*hwnd as _), WM_APP_HIDE_CODE, WPARAM(0), LPARAM(0));
+            }
+        }
     }
 
     fn ui() -> Option<usize> {
@@ -346,7 +390,7 @@ mod imp {
                 STATE.with(|s| {
                     let mut s = s.borrow_mut();
                     let was_up = matches!(s.phase, Phase::Shown);
-                    s.card = Some(Card { files: p.files, close: p.normal.close, scale: p.scale, normal, hover });
+                    s.card = Some(Card { files: p.files, code: p.code, close: p.normal.close, scale: p.scale, normal, hover });
                     s.home = h;
                     s.hovered = false;
                     // Already up: swap the photo in place. Otherwise rise from the taskbar.
@@ -355,7 +399,13 @@ mod imp {
                 present(hwnd, if STATE.with(|s| s.borrow().phase == Phase::Shown) { 1.0 } else { 0.0 });
                 let _ = SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
                 SetTimer(hwnd, TIMER_ANIM, 10, None);
-                SetTimer(hwnd, TIMER_HIDE, SHOW_FOR_MS, None);
+                SetTimer(hwnd, TIMER_HIDE, if p.code { CODE_FOR_MS } else { SHOW_FOR_MS }, None);
+                LRESULT(0)
+            }
+            WM_APP_HIDE_CODE => {
+                if STATE.with(|s| s.borrow().card.as_ref().is_some_and(|c| c.code)) {
+                    start_hide(hwnd);
+                }
                 LRESULT(0)
             }
             WM_TIMER if wp.0 == TIMER_ANIM => {
@@ -422,7 +472,8 @@ mod imp {
                         present(hwnd, 1.0);
                     }
                 }
-                if let Some(p) = press {
+                let showing_code = STATE.with(|s| s.borrow().card.as_ref().is_some_and(|c| c.code));
+                if let Some(p) = press.filter(|_| !showing_code) {
                     let (dx, dy) = (GetSystemMetrics(SM_CXDRAG), GetSystemMetrics(SM_CYDRAG));
                     if (pt.x - p.x).abs() > dx || (pt.y - p.y).abs() > dy {
                         STATE.with(|s| s.borrow_mut().press = None);
@@ -441,7 +492,10 @@ mod imp {
                 if STATE.with(|s| s.borrow().phase == Phase::Shown) {
                     present(hwnd, 1.0);
                 }
-                SetTimer(hwnd, TIMER_HIDE, 2000, None);
+                // A photo goes soon after the pointer leaves; the code waits to be scanned.
+                if !STATE.with(|s| s.borrow().card.as_ref().is_some_and(|c| c.code)) {
+                    SetTimer(hwnd, TIMER_HIDE, 2000, None);
+                }
                 LRESULT(0)
             }
             WM_LBUTTONDOWN => {
@@ -453,9 +507,17 @@ mod imp {
                 let pt = point(lp);
                 let pressed = STATE.with(|s| s.borrow_mut().press.take()).is_some();
                 let _ = ReleaseCapture();
-                if pressed {
+                let (code, closing) = STATE.with(|s| {
+                    s.borrow().card.as_ref().map(|c| (c.code, on_close(c, pt))).unwrap_or((false, false))
+                });
+                if pressed && code {
+                    // Clicking the code itself does nothing; only the close badge takes it down.
+                    if closing {
+                        start_hide(hwnd);
+                    }
+                } else if pressed {
                     let open = STATE.with(|s| {
-                        s.borrow().card.as_ref().filter(|c| !on_close(c, pt)).map(|c| c.files[0].clone())
+                        s.borrow().card.as_ref().filter(|c| !on_close(c, pt)).and_then(|c| c.files.first().cloned())
                     });
                     if let Some(f) = open {
                         let w: Vec<u16> = f.as_os_str().encode_wide().chain(Some(0)).collect();

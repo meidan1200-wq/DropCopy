@@ -27,7 +27,7 @@ pub struct Config {
 
 /// Every setting `dropcopy set` accepts, with its meaning, for the help text.
 pub const SETTINGS: &[(&str, &str)] = &[
-    ("popup", "on|off   the phone above the taskbar when photos arrive"),
+    ("popup", "on|off   the phone above the taskbar: new photos, and the pairing code when a phone asks"),
     ("near", "on|off   show the latest photo when the phone is brought close (Bluetooth)"),
     ("near_rssi", "-30..-90 how close counts as close (default -55; see `dropcopy near`)"),
     ("auto_update", "on|off   install new versions automatically"),
@@ -162,9 +162,25 @@ impl Config {
     pub fn rekey(&mut self) -> io::Result<()> {
         self.id = random();
         self.key = random();
+        let _ = fs::remove_file(self.home.join(PAIRED));
         self.save()
     }
+
+    /// True once a phone has connected with the current key, so it holds the pairing.
+    pub fn is_paired(&self) -> bool {
+        self.home.join(PAIRED).exists()
+    }
+
+    /// Called after every authenticated connection; writes only the first time.
+    pub fn mark_paired(&self) {
+        let p = self.home.join(PAIRED);
+        if !p.exists() {
+            let _ = fs::write(p, b"a phone has connected with this key\n");
+        }
+    }
 }
+
+const PAIRED: &str = "paired";
 
 #[cfg(unix)]
 fn restrict_permissions(p: &Path) {

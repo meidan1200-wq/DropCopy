@@ -68,9 +68,42 @@ fn sample_cover(photo: &RgbaImage, u: f32, v: f32, w: f32, h: f32) -> [f32; 3] {
     out
 }
 
+/// What the phone's screen shows.
+pub enum Screen<'a> {
+    Photo(Option<&'a RgbaImage>),
+    /// A QR code: `modules` is row-major, true = dark, `width` modules a side.
+    Code { modules: &'a [bool], width: usize },
+}
+
+/// Smallest module, in logical pixels, that a phone camera reads reliably off a laptop screen.
+pub const CODE_MODULE: f32 = 3.0;
+/// Light modules kept around the code inside the white screen.
+const CODE_QUIET: usize = 2;
+
+/// The scale the pairing phone is drawn at so each module is a whole number of pixels, at least
+/// `CODE_MODULE` logical pixels. `dpi` is DPI / 96.
+pub fn code_scale(width: usize, dpi: f32) -> f32 {
+    let px = (CODE_MODULE * dpi.max(1.0)).ceil();
+    let need = (width + 2 * CODE_QUIET) as f32 * px;
+    need / (screen_w(1.0) * 0.94) + 0.01
+}
+
+fn screen_w(s: f32) -> f32 {
+    BODY_W * s - 2.0 * 3.2 * s
+}
+
 /// Renders the phone at `scale` (DPI / 96). `count` > 1 stacks a second handset behind; `hover`
 /// shows the close badge.
 pub fn render(photo: Option<&RgbaImage>, scale: f32, count: usize, hover: bool) -> Art {
+    draw(Screen::Photo(photo), scale, count, hover)
+}
+
+/// The phone with a pairing code on its screen, large enough to scan; `scale` is DPI / 96.
+pub fn render_code(modules: &[bool], width: usize, scale: f32, hover: bool) -> Art {
+    draw(Screen::Code { modules, width }, code_scale(width, scale), 1, hover)
+}
+
+pub fn draw(screen: Screen, scale: f32, count: usize, hover: bool) -> Art {
     let s = scale.max(1.0);
     let (bw, bh, m) = (BODY_W * s, BODY_H * s, MARGIN * s);
     let (w, h) = ((bw + 2.0 * m).ceil() as u32, (bh + 2.0 * m).ceil() as u32);
@@ -82,6 +115,20 @@ pub fn render(photo: Option<&RgbaImage>, scale: f32, count: usize, hover: bool) 
     let r_screen = r_body - bezel;
     let close = (cx + bw / 2.0 - 3.0 * s, m + 3.0 * s, 9.0 * s);
 
+    let photo = match screen {
+        Screen::Photo(p) => p,
+        Screen::Code { .. } => None,
+    };
+    // A code is drawn with whole pixels per module, centred, so every edge is sharp.
+    let code = match screen {
+        Screen::Code { modules, width } => {
+            let px = ((sw * 0.94) / (width + 2 * CODE_QUIET) as f32).floor().max(1.0);
+            let side = px * width as f32;
+            let (x0, y0) = ((cx - side / 2.0).round(), (cy - side / 2.0).round());
+            Some((modules, width, px, x0, y0))
+        }
+        Screen::Photo(_) => None,
+    };
     // Thumbnail of the photo, pre-scaled once so per-pixel sampling stays cheap.
     let small = photo.map(|p| {
         let k = (sw * 1.5 / p.width() as f32).max(sh * 1.5 / p.height() as f32).min(1.0);
@@ -120,9 +167,15 @@ pub fn render(photo: Option<&RgbaImage>, scale: f32, count: usize, hover: bool) 
         let dsc = rbox(fx, fy, cx, cy, sw / 2.0, sh / 2.0, r_screen);
         let a = cover(dsc);
         if a > 0.0 {
-            let c = match &small {
-                Some(p) => sample_cover(p, fx - (cx - sw / 2.0), fy - (cy - sh / 2.0), sw, sh),
-                None => rgb(0x1C2230),
+            let c = if let Some((modules, width, px, x0, y0)) = code {
+                let (mx, my) = (((fx - x0) / px).floor(), ((fy - y0) / px).floor());
+                let inside = mx >= 0.0 && my >= 0.0 && (mx as usize) < width && (my as usize) < width;
+                if inside && modules[my as usize * width + mx as usize] { [0.0; 3] } else { [1.0; 3] }
+            } else {
+                match &small {
+                    Some(p) => sample_cover(p, fx - (cx - sw / 2.0), fy - (cy - sh / 2.0), sw, sh),
+                    None => rgb(0x1C2230),
+                }
             };
             blend(px, c, a);
         }
@@ -181,6 +234,29 @@ mod tests {
         // The body edge is anti-aliased: some pixels between opaque and transparent.
         let row = h / 2;
         assert!((0..w).any(|x| (40..220).contains(&art.image.get_pixel(x, row)[3])));
+    }
+
+    #[test]
+    fn pairing_code_is_sharp_and_scannable_size() {
+        let code = qrcode::QrCode::with_error_correction_level(b"dropcopy://pair?v=1&id=0123456789abcdef&k=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&n=DESKTOP-4E1E3TB&p=48650&a=192.168.100.200", qrcode::EcLevel::L).unwrap();
+        let w = code.width();
+        let modules: Vec<bool> = code.to_colors().into_iter().map(|c| c == qrcode::Color::Dark).collect();
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let art = render_code(&modules, w, scale, false);
+            // Count the run of the top-left finder pattern's dark row: 7 modules, whole pixels.
+            let img = &art.image;
+            let mid_y = img.height() / 2;
+            let row: Vec<bool> = (0..img.width()).map(|x| img.get_pixel(x, mid_y)[0] < 128 && img.get_pixel(x, mid_y)[3] == 255).collect();
+            assert!(row.iter().any(|d| *d));
+            // Every pixel of the screen is pure black or pure white (no blur).
+            let first_dark = (0..img.width()).find(|&x| {
+                let p = img.get_pixel(x, img.height() / 2);
+                p[0] == 0 && p[3] == 255
+            });
+            assert!(first_dark.is_some(), "code drawn at scale {scale}");
+            let px = ((screen_w(code_scale(w, scale)) * 0.94) / (w + 4) as f32).floor();
+            assert!(px >= CODE_MODULE * scale, "module {px}px at scale {scale}");
+        }
     }
 
     #[test]

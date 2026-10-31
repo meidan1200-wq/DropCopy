@@ -183,6 +183,159 @@
             </LinearLayout>
         </LinearLayout>
 
+        <!-- Settings Android needs the user to tap; each row shows only while it is missing. -->
+        <LinearLayout
+            android:id="@+id/needs_card"
+            style="@style/Card"
+            android:paddingTop="14dp"
+            android:paddingBottom="6dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/needs_title"
+                style="@style/Body"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="sans-serif-medium"
+                android:text="Needs your OK on this phone"
+                android:textColor="@color/warn" />
+
+            <ImageView
+                android:id="@+id/row_ok_battery_div"
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/divider" />
+
+            <LinearLayout
+                android:id="@+id/row_ok_battery"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:minHeight="72dp"
+                android:orientation="horizontal"
+                android:paddingTop="10dp"
+                android:paddingBottom="10dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/Title"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Keep working when closed" />
+
+                    <TextView
+                        style="@style/Body"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="Battery saving stops DropCopy once you leave the app. Tap Allow, then Allow again." />
+                </LinearLayout>
+
+                <Button
+                    android:id="@+id/battery_allow"
+                    style="@style/Btn.Tonal"
+                    android:layout_width="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:text="Allow" />
+            </LinearLayout>
+
+            <ImageView
+                android:id="@+id/row_ok_notify_div"
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/divider" />
+
+            <LinearLayout
+                android:id="@+id/row_ok_notify"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:minHeight="72dp"
+                android:orientation="horizontal"
+                android:paddingTop="10dp"
+                android:paddingBottom="10dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/Title"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Show its notifications" />
+
+                    <TextView
+                        style="@style/Body"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="Android needs this to keep DropCopy running and to tell you about updates." />
+                </LinearLayout>
+
+                <Button
+                    android:id="@+id/notify_allow"
+                    style="@style/Btn.Tonal"
+                    android:layout_width="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:text="Allow" />
+            </LinearLayout>
+
+            <ImageView
+                android:id="@+id/row_ok_install_div"
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/divider" />
+
+            <LinearLayout
+                android:id="@+id/row_ok_install"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:minHeight="72dp"
+                android:orientation="horizontal"
+                android:paddingTop="10dp"
+                android:paddingBottom="10dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/Title"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Let updates install" />
+
+                    <TextView
+                        style="@style/Body"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="Android asks once. Turn on “Allow from this source”, then come back." />
+                </LinearLayout>
+
+                <Button
+                    android:id="@+id/install_allow"
+                    style="@style/Btn.Tonal"
+                    android:layout_width="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:text="Open" />
+            </LinearLayout>
+        </LinearLayout>
+
         <!-- Automatic -->
         <TextView
             style="@style/SectionLabel"
@@ -325,31 +478,6 @@
                     android:trackTint="@color/switch_track" />
             </LinearLayout>
 
-            <LinearLayout
-                android:id="@+id/row_battery"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="4dp"
-                android:layout_marginBottom="8dp"
-                android:gravity="center_vertical"
-                android:orientation="horizontal"
-                android:visibility="gone">
-
-                <TextView
-                    style="@style/Body"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="Battery saving may pause DropCopy. Let it run in the background so this keeps working."
-                    android:textColor="@color/warn" />
-
-                <Button
-                    android:id="@+id/battery_allow"
-                    style="@style/Btn.Tonal"
-                    android:layout_width="wrap_content"
-                    android:layout_marginStart="12dp"
-                    android:text="Allow" />
-            </LinearLayout>
         </LinearLayout>
 
         <!-- How to send -->

@@ -15,20 +15,25 @@ phone: Share → DropCopy        PC: file saved to Pictures\DropCopy
 
 **PC (Windows)**
 
-1. Run `dropcopy.exe`. It prints a QR code.
-2. When Windows Firewall asks, tick **Private networks** → Allow. Your Wi-Fi must be set to *Private*
-   (Settings → Network → Wi-Fi → your network → Private), or inbound connections are blocked.
-3. Recommended: `dropcopy setup` — installs it to `%LOCALAPPDATA%\DropCopy`, starts it in the background
-   now and at every sign-in, with no window. It waits quietly when there is no network and picks up as soon
-   as there is. Log: `%APPDATA%\DropCopy\log.txt`. Undo with `dropcopy unsetup`. From an administrator
-   terminal it also adds the firewall rule, so Windows never asks.
+1. Double-click `dropcopy.exe`. It sets itself up to run in the background and to start with Windows
+   (installed to `%LOCALAPPDATA%\DropCopy`), then shows the pairing QR code and live activity. **Closing the
+   window does not stop it.** With no network it waits quietly and picks up when the Wi-Fi is back.
+   Running a newer download the same way upgrades it; an older one never replaces a newer install.
+2. When Windows Firewall asks, tick **Private networks** → Allow. (From an administrator terminal,
+   `dropcopy setup` adds the rule itself, so Windows never asks.)
+3. Log: `%APPDATA%\DropCopy\log.txt`. Remove it all with `dropcopy unsetup`. `dropcopy serve` receives
+   in the window only, the old way.
 
 **Phone**
 
 1. Install the APK (allow "install unknown apps" for your browser/files app).
-2. Open DropCopy → **Scan pairing code** → point at the QR. It checks the connection right away and
-   the PC prints `checked in`.
-3. Optional: pull down Quick Settings → edit → add the **Send clipboard** tile.
+2. Open DropCopy. If the phone isn't paired, it asks the network, the PC shows its pairing code above the
+   taskbar (as a small phone), and the scanner opens: point it at the code. That's the whole pairing,
+   and it works the same after reinstalling the app. The PC remembers its key, so phones paired before
+   keep working.
+3. If anything still needs your OK on the phone (battery saving, notifications, installing updates), a
+   **Needs your OK** card lists exactly that, with one button each.
+4. Optional: pull down Quick Settings → edit → add the **Send clipboard** tile.
 
 ## Sending
 
@@ -101,6 +106,9 @@ or the PC connected to the phone's hotspot. Guest networks with "client isolatio
 Pairing exchanges a random 256-bit key through the QR code (it never crosses the network). Every transfer is
 authenticated and encrypted with keys derived from it; discovery replies are authenticated too, so nothing on
 the network can impersonate your PC or push files to it. `dropcopy pair --new` revokes every phone.
+The "show your pairing code" request carries nothing secret; the PC answers it at most every 20 s with its
+name, and the code (which holds the key) only ever appears on the PC's own screen. Turn the popup off with
+`dropcopy set popup off`.
 Settings: `%APPDATA%\DropCopy\config.txt`.
 
 ## Building

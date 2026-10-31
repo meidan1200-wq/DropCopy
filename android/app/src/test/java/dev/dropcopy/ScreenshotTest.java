@@ -27,9 +27,14 @@ public class ScreenshotTest {
             + "&k=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&n=DESKTOP-4E1E3TB&p=48650&a=192.168.1.120";
 
     private void shoot(String name) throws Exception {
+        shoot(name, null);
+    }
+
+    private void shoot(String name, java.util.function.Consumer<MainActivity> before) throws Exception {
         String dir = System.getenv("DROPCOPY_SHOTS");
         assumeTrue("set DROPCOPY_SHOTS to write screenshots", dir != null && !dir.isEmpty());
         MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
+        if (before != null) before.accept(a);
         View root = a.getWindow().getDecorView();
         View content = a.findViewById(R.id.scroll);
         // Measure the whole scrollable page, not just the first screenful.
@@ -49,6 +54,23 @@ public class ScreenshotTest {
     @Test
     public void unpairedLight() throws Exception {
         shoot("main-unpaired-light");
+    }
+
+    /** Opened unpaired while the PC answered: it is showing its code, the phone says so. */
+    @Test
+    public void unpairedPcShowingCode() throws Exception {
+        shoot("main-unpaired-waiting", a -> {
+            try {
+                java.lang.reflect.Field f = MainActivity.class.getDeclaredField("waitingPc");
+                f.setAccessible(true);
+                f.set(a, "DESKTOP-4E1E3TB");
+                java.lang.reflect.Method m = MainActivity.class.getDeclaredMethod("refresh");
+                m.setAccessible(true);
+                m.invoke(a);
+            } catch (ReflectiveOperationException e) {
+                throw new RuntimeException(e);
+            }
+        });
     }
 
     @Test

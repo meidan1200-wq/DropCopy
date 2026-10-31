@@ -78,7 +78,17 @@ public class WatchService extends Service {
         boolean media = wantsMedia(this), near = wantsNear(this);
         String what = media && near ? "Sending new screenshots · visible to your PC when near"
                 : media ? "Sending new screenshots to your PC" : "Your PC will see the phone when it's near";
-        startForeground(2, SendService.notification(this, CHANNEL, what).setContentText("Change in DropCopy").build());
+        // Battery saving would stop this once the app is closed: say so where it shows, and the
+        // tap leads straight to the card with the Allow button.
+        android.os.PowerManager pm = getSystemService(android.os.PowerManager.class);
+        boolean exempt = pm == null || pm.isIgnoringBatteryOptimizations(getPackageName());
+        android.app.PendingIntent open = android.app.PendingIntent.getActivity(this, 0,
+                new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                android.app.PendingIntent.FLAG_IMMUTABLE);
+        startForeground(2, SendService.notification(this, CHANNEL, what)
+                .setContentText(exempt ? "Change in DropCopy" : "Battery saving may stop this - tap to allow")
+                .setContentIntent(open)
+                .build());
         if (near) startNearWatch(); else stopNearWatch();
         if (media && observer == null) {
             sinceSeconds = System.currentTimeMillis() / 1000 - 2;

@@ -34,7 +34,7 @@ fn files_and_text_arrive_intact() {
     let key = cfg.key;
     let id = cfg.id;
     let save_dir = cfg.save_dir.clone();
-    let server = Server::bind(Arc::new(cfg), ServeOpts { port: 0, clip: ClipMode::Off, discovery: false, popup: false }).unwrap();
+    let server = Server::bind(Arc::new(cfg), ServeOpts { port: 0, clip: ClipMode::Off, discovery: false, popup: false, pairing: false }).unwrap();
     let addr = local_addr(&server);
     std::thread::spawn(move || server.run());
 
@@ -72,7 +72,7 @@ fn wrong_key_is_refused_and_leaves_nothing() {
     let dir = temp("wrongkey");
     let cfg = config(&dir);
     let save_dir = cfg.save_dir.clone();
-    let server = Server::bind(Arc::new(cfg), ServeOpts { port: 0, clip: ClipMode::Off, discovery: false, popup: false }).unwrap();
+    let server = Server::bind(Arc::new(cfg), ServeOpts { port: 0, clip: ClipMode::Off, discovery: false, popup: false, pairing: false }).unwrap();
     let addr = local_addr(&server);
     std::thread::spawn(move || server.run());
 
@@ -118,7 +118,7 @@ fn discovery_finds_the_receiver() {
     }
     let dir = temp("discover");
     let cfg = config(&dir);
-    let server = match Server::bind(Arc::new(cfg), ServeOpts { port: 0, clip: ClipMode::Off, discovery: true, popup: false }) {
+    let server = match Server::bind(Arc::new(cfg), ServeOpts { port: 0, clip: ClipMode::Off, discovery: true, popup: false, pairing: false }) {
         Ok(s) => s,
         Err(_) => return,
     };
@@ -127,4 +127,35 @@ fn discovery_finds_the_receiver() {
     let (sender, _) = Config::load_or_create(dir.join("home")).unwrap();
     let found = client::discover(&sender, std::time::Duration::from_secs(2)).unwrap();
     assert_eq!(found.port(), port);
+
+    // An unpaired phone asking who is here gets the PC's name, and nothing secret.
+    let phone = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+    phone.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+    phone.send_to(b"DCQ1\x01\x02\x03\x04\x05\x06\x07\x08", ("127.0.0.1", dropcopy::proto::UDP_PORT)).unwrap();
+    let mut buf = [0u8; 128];
+    let (n, _) = phone.recv_from(&mut buf).unwrap();
+    assert_eq!(&buf[..12], b"DCA1\x01\x02\x03\x04\x05\x06\x07\x08");
+    assert_eq!(std::str::from_utf8(&buf[12..n]).unwrap(), sender.name);
+    assert!(n <= 12 + 64);
+}
+
+#[test]
+fn a_phone_that_connects_marks_the_pc_paired() {
+    let dir = temp("paired");
+    let cfg = config(&dir);
+    assert!(!cfg.is_paired());
+    let server = Server::bind(Arc::new(cfg), ServeOpts { port: 0, clip: ClipMode::Off, discovery: false, popup: false, pairing: false }).unwrap();
+    let addr = local_addr(&server);
+    std::thread::spawn(move || server.run());
+    let (mut phone, _) = Config::load_or_create(dir.join("home")).unwrap();
+    client::send(&phone, Some(&loopback(addr)), &[Item::Text("hi".into())]).unwrap();
+    // The receiver records it just after acknowledging the transfer.
+    let t0 = std::time::Instant::now();
+    while !phone.is_paired() && t0.elapsed() < std::time::Duration::from_secs(3) {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(phone.is_paired());
+    // A new key forgets it, so the next start shows the code again.
+    phone.rekey().unwrap();
+    assert!(!phone.is_paired());
 }

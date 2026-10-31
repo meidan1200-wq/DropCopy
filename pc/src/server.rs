@@ -19,6 +19,8 @@ pub struct ServeOpts {
     pub discovery: bool,
     /// Show the little phone above the taskbar when photos arrive.
     pub popup: bool,
+    /// When an unpaired phone asks, show the pairing code above the taskbar.
+    pub pairing: bool,
 }
 
 /// What one connection delivered.
@@ -49,7 +51,7 @@ impl Server {
                 let cfg = cfg.clone();
                 thread::Builder::new()
                     .name("discovery".into())
-                    .spawn(move || discovery_loop(sock, &cfg, port))?;
+                    .spawn(move || discovery_loop(sock, &cfg, port, opts.pairing))?;
             }
             Err(e) => say!("  ! discovery port {UDP_PORT} unavailable ({e}); phones will use the last known address"),
         }
@@ -74,6 +76,9 @@ impl Server {
                 let t0 = Instant::now();
                 match handle(stream, &cfg) {
                     Ok(r) => {
+                        // Only a phone holding the key gets this far: it is paired.
+                        cfg.mark_paired();
+                        crate::popup::hide_code();
                         if !r.files.is_empty() {
                             crate::popup::remember(&r.files);
                             if popup {
@@ -92,16 +97,35 @@ impl Server {
     }
 }
 
-fn discovery_loop(sock: UdpSocket, cfg: &Config, port: u16) {
+fn discovery_loop(sock: UdpSocket, cfg: &Config, port: u16, pairing: bool) {
     let mut buf = [0u8; 64];
+    let mut last_shown: Option<Instant> = None;
     loop {
         // Windows reports an ICMP "port unreachable" from an earlier send as a recv error.
         let Ok((n, from)) = sock.recv_from(&mut buf) else { continue };
         if n == 28 && &buf[..4] == DISCOVER_MAGIC && buf[4..12] == cfg.id {
             let _ = sock.send_to(&reply_packet(&cfg.id, &cfg.key, &buf[12..28], port), from);
+        } else if n == 4 && &buf[..4] == STOP_MAGIC && from.ip().is_loopback() {
+            say!("  stopping: a newer copy is taking over");
+            std::process::exit(0);
+        } else if n == 12 && &buf[..4] == PAIR_ASK_MAGIC {
+            // The phone repeats its question a few times; show the code once per opening.
+            let fresh = last_shown.is_none_or(|t| t.elapsed() > PAIR_ASK_QUIET);
+            let _ = sock.send_to(&pair_answer(&buf[4..12], &cfg.name), from);
+            if fresh {
+                last_shown = Some(Instant::now());
+                say!("  {} is asking to pair - showing the pairing code on screen", from.ip());
+                if pairing {
+                    crate::popup::show_code(crate::pair::link(cfg, port));
+                }
+            }
         }
     }
 }
+
+/// How long after showing the pairing code further requests only get an answer. Anyone on the
+/// network can ask, so this also keeps a noisy device from flashing the code over and over.
+const PAIR_ASK_QUIET: Duration = Duration::from_secs(20);
 
 fn report(r: &Received, peer: &str, t0: Instant, clip: ClipMode, lock: &Mutex<()>) {
     let ms = t0.elapsed().as_millis();

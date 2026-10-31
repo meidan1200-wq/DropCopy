@@ -16,6 +16,11 @@ use std::io::{self, Read, Write};
 pub const MAGIC: &[u8; 4] = b"DCP1";
 pub const DISCOVER_MAGIC: &[u8; 4] = b"DCD1";
 pub const REPLY_MAGIC: &[u8; 4] = b"DCR1";
+/// An unpaired phone asking "is a DropCopy PC here?" so the PC can put its pairing code on screen.
+pub const PAIR_ASK_MAGIC: &[u8; 4] = b"DCQ1";
+pub const PAIR_ANSWER_MAGIC: &[u8; 4] = b"DCA1";
+/// From this machine only: a newer copy asking the running one to quit so it can take over.
+pub const STOP_MAGIC: &[u8; 4] = b"DCS1";
 pub const TCP_PORT: u16 = 48650;
 pub const UDP_PORT: u16 = 48651;
 
@@ -188,6 +193,20 @@ pub fn reply_packet(id: &[u8; 8], key: &[u8; 32], nonce: &[u8], port: u16) -> [u
     p
 }
 
+/// "DCA1" | nonce[8] | name (utf-8, at most 64 bytes). Carries no secret: the key only ever
+/// travels in the QR code, which the phone reads off the PC's screen.
+pub fn pair_answer(nonce: &[u8], name: &str) -> Vec<u8> {
+    let mut end = name.len().min(64);
+    while !name.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut p = Vec::with_capacity(12 + end);
+    p.extend_from_slice(PAIR_ANSWER_MAGIC);
+    p.extend_from_slice(&nonce[..8]);
+    p.extend_from_slice(&name.as_bytes()[..end]);
+    p
+}
+
 /// Returns the TCP port if `pkt` is a genuine reply to `nonce` from the PC `id`.
 pub fn parse_reply(pkt: &[u8], id: &[u8; 8], key: &[u8; 32], nonce: &[u8; 16]) -> Option<u16> {
     if pkt.len() != 30 || &pkt[..4] != REPLY_MAGIC || &pkt[4..12] != id {
@@ -284,6 +303,16 @@ mod tests {
         w.write(&mut wire, T_TEXT, b"secret", &mut buf).unwrap();
         wire[6] ^= 1;
         assert!(r.read(&mut &wire[..], &mut buf).is_err());
+    }
+
+    #[test]
+    fn pair_answer_carries_only_the_name_cut_on_a_char_boundary() {
+        let a = pair_answer(&[9; 8], "PC");
+        assert_eq!(a, b"DCA1\x09\x09\x09\x09\x09\x09\x09\x09PC");
+        let long = "מחשב".repeat(20); // 160 bytes of 2-byte chars
+        let a = pair_answer(&[0; 8], &long);
+        assert!(a.len() <= 12 + 64);
+        assert!(std::str::from_utf8(&a[12..]).is_ok());
     }
 
     #[test]

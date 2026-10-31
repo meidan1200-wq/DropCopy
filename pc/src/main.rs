@@ -13,7 +13,10 @@ const USAGE: &str = "\
 DropCopy - share on your phone, Ctrl+V on this PC. Local network only, no cloud.
 
 USAGE
-  dropcopy                      receive (shows the pairing QR code on first run)
+  dropcopy                      Windows: make sure it runs in the background (and starts
+                                with Windows), then show pairing and live activity here.
+                                Closing the window does not stop it.
+  dropcopy serve                receive in this window only (stops when it closes)
   dropcopy pair [--new] [--png] [--invert]
                                 show the pairing QR code
                                   --new     new key: every paired phone must scan again
@@ -113,9 +116,10 @@ fn main() -> ExitCode {
 
 fn run(a: Args) -> Result<(), String> {
     let home = a.home.clone().unwrap_or_else(default_home);
-    let (mut cfg, created) = Config::load_or_create(home).map_err(|e| format!("settings: {e}"))?;
+    let (mut cfg, _) = Config::load_or_create(home).map_err(|e| format!("settings: {e}"))?;
     match a.cmd.as_deref() {
-        None | Some("serve") | Some("receive") => serve(cfg, created, &a),
+        None if cfg!(windows) && !a.hidden && !a.background => launch(cfg, &a),
+        None | Some("serve") | Some("receive") => serve(cfg, &a),
         Some("pair") => {
             if a.new_key {
                 cfg.rekey().map_err(|e| e.to_string())?;
@@ -176,7 +180,77 @@ fn run(a: Args) -> Result<(), String> {
     }
 }
 
-fn serve(cfg: Config, first_run: bool, a: &Args) -> Result<(), String> {
+/// What a double-click does: the background copy does the receiving, so this window is only a
+/// view of it, and closing it changes nothing.
+fn launch(cfg: Config, a: &Args) -> Result<(), String> {
+    say!("DropCopy v{} - share on your phone, Ctrl+V on this PC.\n", dropcopy::update::current());
+    let fresh_log = match setup::ensure_background(&cfg) {
+        Ok(setup::Bg::Running) => {
+            say!("  Running in the background. It starts with Windows, and closing this window doesn't stop it.");
+            false
+        }
+        Ok(setup::Bg::Started) => {
+            say!("  Set up: DropCopy now runs in the background and starts with Windows.");
+            say!("  Closing this window doesn't stop it. (To remove it: dropcopy unsetup)");
+            true
+        }
+        Err(e) => {
+            say!("  ! couldn't start in the background ({e}); receiving in this window instead.\n");
+            return serve(cfg, a);
+        }
+    };
+    say!("  Saving to {}", cfg.save_dir.display());
+    let pairing = !cfg.is_paired();
+    if pairing {
+        pair::print_pairing(&cfg, a.port, a.invert);
+    } else {
+        say!("  Your phone is paired. Reinstalled the app? Just open it on the phone:");
+        say!("  the pairing code pops up above the taskbar.");
+    }
+    say!("\n  Activity (live):");
+    tail_log(&cfg.home.join("log.txt"), fresh_log, pairing)
+}
+
+/// Follows the background copy's log, leaving out its start-up banner.
+fn tail_log(path: &std::path::Path, from_start: bool, pairing: bool) -> Result<(), String> {
+    use std::io::{Read, Seek, SeekFrom};
+    const BANNER: [&str; 5] = ["DropCopy - receiving", "  Saving to", "  Pair another", "  Waiting for", "  Pair your phone"];
+    let mut pos = if from_start { 0 } else { std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) };
+    let mut partial = String::new();
+    let mut announced = !pairing;
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let Ok(mut f) = std::fs::File::open(path) else { continue };
+        let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+        if len < pos {
+            pos = 0; // restarted (e.g. after an update): a new log
+            partial.clear();
+        }
+        if len == pos || f.seek(SeekFrom::Start(pos)).is_err() {
+            continue;
+        }
+        let mut chunk = Vec::new();
+        if f.read_to_end(&mut chunk).is_err() {
+            continue;
+        }
+        pos += chunk.len() as u64;
+        partial.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some(i) = partial.find('\n') {
+            let line: String = partial.drain(..=i).collect();
+            let line = line.trim_end();
+            if line.is_empty() || BANNER.iter().any(|b| line.starts_with(b)) {
+                continue;
+            }
+            say!("{line}");
+            if !announced && line.starts_with("  <-") {
+                announced = true;
+                say!("\n  Paired. You can close this window - DropCopy keeps running.\n");
+            }
+        }
+    }
+}
+
+fn serve(cfg: Config, a: &Args) -> Result<(), String> {
     if a.hidden && setup::detach() {
         return Ok(());
     }
@@ -185,7 +259,7 @@ fn serve(cfg: Config, first_run: bool, a: &Args) -> Result<(), String> {
     }
     let cfg = Arc::new(cfg);
     dropcopy::update::cleanup();
-    let opts = || ServeOpts { port: a.port, clip: a.clip, discovery: true, popup: cfg.popup };
+    let opts = || ServeOpts { port: a.port, clip: a.clip, discovery: true, popup: cfg.popup, pairing: cfg.popup };
     let mut bound = Server::bind(cfg.clone(), opts());
     // Just restarted by an update: the old copy may still be letting go of the port.
     for _ in 0..40 {
@@ -206,10 +280,12 @@ fn serve(cfg: Config, first_run: bool, a: &Args) -> Result<(), String> {
     })?;
     say!("DropCopy - receiving as \"{}\" on port {}", cfg.name, server.port);
     say!("  Saving to {}", cfg.save_dir.display());
-    if first_run {
+    if a.background {
+        // Nobody reads a QR code in a log; an unpaired phone asks, and the code pops up.
+    } else if !cfg.is_paired() {
         pair::print_pairing(&cfg, server.port, a.invert);
     } else {
-        say!("  Pair another phone: dropcopy pair");
+        say!("  Pair another phone: dropcopy pair (or just open the app on it)");
     }
     say!("  Waiting for your phone... (Ctrl+C to stop)\n");
     setup::warn_if_public_network();
@@ -282,7 +358,7 @@ fn doctor(cfg: &Config) -> Result<(), String> {
     std::fs::create_dir_all(&cfg.save_dir).map_err(|e| e.to_string())?;
     let probe = cfg.save_dir.join(".dropcopy-doctor.png");
     image::RgbaImage::from_pixel(4, 8, image::Rgba([40, 80, 160, 255])).save(&probe).map_err(|e| e.to_string())?;
-    match dropcopy::popup::check_drag_data(&[probe.clone()]) {
+    match dropcopy::popup::check_drag_data(std::slice::from_ref(&probe)) {
         Ok(n) => say!("  {} drag and drop: a drop would deliver {n} file", ok(n == 1)),
         Err(e) => say!("  !!  drag and drop: {e}"),
     }
@@ -388,41 +464,110 @@ mod setup {
     }
 
     fn stop_background() {
+        // Asks it to quit (from this machine only), then makes sure for copies too old to know how.
         // The background copy is the installed one; an interactive window elsewhere keeps running.
+        if let Ok(s) = std::net::UdpSocket::bind("127.0.0.1:0") {
+            let _ = s.send_to(dropcopy::proto::STOP_MAGIC, ("127.0.0.1", dropcopy::proto::UDP_PORT));
+        }
         if let Some(exe) = installed_exe() {
             let filter = format!("$p = '{}'; Get-Process dropcopy -ErrorAction SilentlyContinue | Where-Object Path -eq $p | Stop-Process -Force", exe.display());
             quiet(Command::new("powershell").args(["-NoProfile", "-Command", &filter]));
         }
     }
 
+    pub enum Bg {
+        /// Already running, and at least as new as this copy.
+        Running,
+        /// Installed or updated from this copy, and started.
+        Started,
+    }
+
+    /// The version of the installed copy, by asking it.
+    fn installed_version(exe: &std::path::Path) -> Option<dropcopy::update::Version> {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let out = Command::new(exe).arg("version").creation_flags(CREATE_NO_WINDOW).stderr(Stdio::null()).output().ok()?;
+        let text = String::from_utf8_lossy(&out.stdout);
+        dropcopy::update::Version::parse(text.trim().strip_prefix("dropcopy ")?)
+    }
+
+    fn registered() -> bool {
+        quiet(Command::new("reg").args(["query", RUN_KEY, "/v", "DropCopy"]))
+    }
+
+    fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+        a == b || matches!((std::fs::read(a), std::fs::read(b)), (Ok(x), Ok(y)) if x == y)
+    }
+
+    /// Makes sure the background copy is installed, current and running, without a second copy
+    /// ever fighting over the port. Never replaces a newer installed copy with an older download.
+    pub fn ensure_background(cfg: &dropcopy::config::Config) -> Result<Bg, String> {
+        let current = std::env::current_exe().map_err(|e| e.to_string())?;
+        let target = installed_exe().ok_or("LOCALAPPDATA is not set")?;
+        // A discovery probe, not a test bind: binding would make Windows' firewall ask about this copy.
+        let running = dropcopy::client::discover(cfg, std::time::Duration::from_millis(700)).is_ok();
+        let installed = target.exists().then(|| installed_version(&target)).flatten();
+        if let Some(v) = installed.filter(|v| *v > dropcopy::update::current()) {
+            if running {
+                return Ok(Bg::Running);
+            }
+            say!("  (v{v} is installed; starting that one)");
+            return if spawn_hidden(&target.display().to_string(), &["--background".to_string()]) { Ok(Bg::Started) } else { Err("could not start it".into()) };
+        }
+        if running && registered() && same_file(&current, &target) {
+            return Ok(Bg::Running);
+        }
+        install_with(false)?;
+        Ok(Bg::Started)
+    }
+
     pub fn install() -> Result<(), String> {
+        install_with(true)
+    }
+
+    fn install_with(verbose: bool) -> Result<(), String> {
         let current = std::env::current_exe().map_err(|e| e.to_string())?;
         let target = installed_exe().ok_or("LOCALAPPDATA is not set")?;
         stop_background();
         std::fs::create_dir_all(target.parent().unwrap()).map_err(|e| e.to_string())?;
         if current != target {
-            std::fs::copy(&current, &target).map_err(|e| format!("copying to {}: {e}", target.display()))?;
+            // Copy beside it, then swap names: works even if the old copy hasn't quite let go.
+            let tmp = target.with_file_name("dropcopy.new.exe");
+            std::fs::copy(&current, &tmp).map_err(|e| format!("copying to {}: {e}", tmp.display()))?;
+            if target.exists() {
+                dropcopy::update::swap(&target, &tmp)?;
+            } else {
+                std::fs::rename(&tmp, &target).map_err(|e| format!("installing to {}: {e}", target.display()))?;
+            }
         }
         let exe = target.display().to_string();
         let value = format!("\"{exe}\" --hidden");
         if !quiet(Command::new("reg").args(["add", RUN_KEY, "/v", "DropCopy", "/t", "REG_SZ", "/d", &value, "/f"])) {
             return Err("could not add DropCopy to startup".into());
         }
-        say!("  Installed to {exe}");
-        say!("  It starts hidden every time you sign in, and waits quietly when there is no network.");
+        if verbose {
+            say!("  Installed to {exe}");
+            say!("  It starts hidden every time you sign in, and waits quietly when there is no network.");
+        }
         // Transfers are authenticated with the pairing key, so allowing every profile is safe and
         // keeps it working when Windows labels a home Wi-Fi "Public".
         let rule = format!(
             "advfirewall firewall add rule name=DropCopy dir=in action=allow enable=yes profile=any program=\"{exe}\""
         );
-        let _ = quiet(Command::new("netsh").raw_arg("advfirewall firewall delete rule name=DropCopy"));
-        if quiet(Command::new("netsh").raw_arg(&rule)) {
-            say!("  Firewall: allowed.");
+        // The path never changes, so a rule made once (as administrator) stays right.
+        if quiet(Command::new("netsh").raw_arg("advfirewall firewall show rule name=DropCopy"))
+            || quiet(Command::new("netsh").raw_arg(&rule))
+        {
+            if verbose {
+                say!("  Firewall: allowed.");
+            }
         } else {
             say!("  Firewall: Windows will ask once when it starts - click Allow (tick both boxes).");
             say!("  (Or run `dropcopy setup` from an administrator terminal to skip the prompt.)");
         }
-        if spawn_hidden(&exe, &["--background".to_string()]) {
+        if !spawn_hidden(&exe, &["--background".to_string()]) {
+            return Err(format!("could not start {exe}"));
+        }
+        if verbose {
             say!("  Running now in the background. You can close this window.");
             say!("  Log: %APPDATA%\\DropCopy\\log.txt   Stop and remove: dropcopy unsetup");
         }
@@ -490,6 +635,16 @@ mod setup {
 
     pub fn detach() -> bool {
         false
+    }
+
+    #[allow(dead_code)] // `launch` only runs on Windows
+    pub enum Bg {
+        Running,
+        Started,
+    }
+
+    pub fn ensure_background(_: &dropcopy::config::Config) -> Result<Bg, String> {
+        Err("only on Windows".into())
     }
 
     pub fn warn_if_public_network() {}

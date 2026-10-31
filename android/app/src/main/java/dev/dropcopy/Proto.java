@@ -50,6 +50,7 @@ public final class Proto {
     static final byte T_OK = 0x10, T_ERR = 0x11;
 
     static final byte[] MAGIC = ascii("DCP1"), DISCOVER = ascii("DCD1"), REPLY = ascii("DCR1");
+    static final byte[] PAIR_ASK = ascii("DCQ1"), PAIR_ANSWER = ascii("DCA1");
     static final byte[] L_SRV = ascii("dropcopy/v1/srv"), L_C2S = ascii("dropcopy/v1/c2s"),
             L_S2C = ascii("dropcopy/v1/s2c"), L_DISC = ascii("dropcopy/v1/disc");
 
@@ -276,6 +277,47 @@ public final class Proto {
         } catch (IOException ignored) { }
         try { out.add(InetAddress.getByName("255.255.255.255")); } catch (IOException ignored) { }
         return out;
+    }
+
+    /**
+     * Asks the network whether a DropCopy PC is here. Any PC that hears it puts its pairing code
+     * on screen, and answers with its name (nothing secret: the key only travels in the QR code).
+     * Returns the first name, or null if none answered within {@code timeoutMs}.
+     */
+    public static String askToPair(List<InetAddress> broadcasts, int timeoutMs) {
+        byte[] nonce = random(8);
+        byte[] ask = new byte[12];
+        System.arraycopy(PAIR_ASK, 0, ask, 0, 4);
+        System.arraycopy(nonce, 0, ask, 4, 8);
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        try (DatagramSocket udp = new DatagramSocket()) {
+            udp.setBroadcast(true);
+            byte[] buf = new byte[128];
+            int sent = 0;
+            while (System.currentTimeMillis() < deadline) {
+                if (sent < 3) { // a few tries: Wi-Fi drops broadcasts
+                    for (InetAddress b : broadcasts) {
+                        try { udp.send(new DatagramPacket(ask, ask.length, b, UDP_PORT)); } catch (IOException ignored) { }
+                    }
+                    sent++;
+                }
+                udp.setSoTimeout((int) Math.max(1, Math.min(300, deadline - System.currentTimeMillis())));
+                DatagramPacket p = new DatagramPacket(buf, buf.length);
+                try { udp.receive(p); } catch (SocketTimeoutException e) { continue; }
+                String name = parsePairAnswer(slice(buf, 0, p.getLength()), nonce);
+                if (name != null) return name;
+            }
+        } catch (IOException ignored) { }
+        return null;
+    }
+
+    /** "DCA1" | nonce[8] | name; null if it isn't the answer to {@code nonce}. */
+    static String parsePairAnswer(byte[] pkt, byte[] nonce) {
+        if (pkt.length < 12 || pkt.length > 12 + 64) return null;
+        for (int i = 0; i < 4; i++) if (pkt[i] != PAIR_ANSWER[i]) return null;
+        for (int i = 0; i < 8; i++) if (pkt[4 + i] != nonce[i]) return null;
+        String name = new String(pkt, 12, pkt.length - 12, StandardCharsets.UTF_8).trim();
+        return name.isEmpty() ? "your PC" : name;
     }
 
     static final class Conn {
