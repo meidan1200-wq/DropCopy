@@ -259,7 +259,7 @@ public class AppTest {
         java.util.concurrent.atomic.AtomicReference<String> who = new java.util.concurrent.atomic.AtomicReference<>();
         PcSetup.Server server;
         try {
-            server = new PcSetup.Server(PcSetup.withLink(exe, link), who::set);
+            server = new PcSetup.Server(PcSetup.withLink(exe, link), PcSetup.page(app, "Galaxy <S20+>", exe.length), who::set);
         } catch (java.net.BindException e) {
             org.junit.Assume.assumeTrue("port in use", false);
             return;
@@ -267,7 +267,8 @@ public class AppTest {
         try {
             java.net.HttpURLConnection page = (java.net.HttpURLConnection) new java.net.URL("http://127.0.0.1:" + PcSetup.PORT + "/").openConnection();
             String html = new String(readAll(page.getInputStream()), "UTF-8");
-            assertTrue(html.contains("href='/DropCopy-Setup.exe'"));
+            assertTrue(html.contains("href=\"/DropCopy-Setup.exe\""));
+            assertTrue("phone name filled in, escaped", html.contains("Galaxy &lt;S20+&gt;") && !html.contains("{{PHONE}}") && !html.contains("{{SIZE}}"));
             java.net.HttpURLConnection dl = (java.net.HttpURLConnection) new java.net.URL("http://127.0.0.1:" + PcSetup.PORT + "/DropCopy-Setup.exe").openConnection();
             assertTrue(dl.getHeaderField("Content-Disposition").contains("DropCopy-Setup.exe"));
             byte[] got = readAll(dl.getInputStream());

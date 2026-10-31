@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DropCopy · Set up this PC</title>
+<style>
+  :root {
+    --blue-top: #237EF0;
+    --blue-bottom: #125AC8;
+    --ink: #0E3A82;
+    --white: #FFFFFF;
+    --soft: rgba(255, 255, 255, 0.78);
+    --faint: rgba(255, 255, 255, 0.16);
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--blue-bottom); }
+  html, body { min-height: 100%; margin: 0; }
+  body {
+    min-height: 100vh;
+    background: linear-gradient(180deg, var(--blue-top), var(--blue-bottom)) fixed;
+    color: var(--white);
+    font-family: "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+  /* The logo, large and faint in the corner, as in the app's setup window. */
+  .corner {
+    position: fixed; right: -6vmin; bottom: -8vmin;
+    width: 62vmin; height: 62vmin; opacity: 0.08; pointer-events: none;
+  }
+  .page {
+    position: relative; min-height: 100%;
+    display: flex; flex-direction: column;
+    max-width: 1040px; margin: 0 auto; padding: 28px 32px 32px;
+  }
+  header { display: flex; align-items: center; gap: 12px; font-size: 17px; font-weight: 600; letter-spacing: 0.01em; }
+  header svg { width: 30px; height: 30px; }
+  main {
+    flex: 1; display: grid; grid-template-columns: auto 1fr; gap: 72px;
+    align-items: center; padding: 40px 0;
+  }
+  .phone { width: 196px; height: auto; filter: drop-shadow(0 18px 30px rgba(6, 30, 80, 0.35)); }
+  .phone .arrow { animation: drop 2.6s cubic-bezier(.4, 0, .2, 1) infinite; transform-origin: center; }
+  @keyframes drop {
+    0%, 20% { transform: translateY(-6px); opacity: 0; }
+    45%, 75% { transform: translateY(0); opacity: 1; }
+    100% { transform: translateY(3px); opacity: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) { .phone .arrow { animation: none; } }
+  h1 { font-size: 46px; line-height: 1.08; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 14px; }
+  .lead { font-size: 18px; line-height: 1.5; color: var(--soft); margin: 0 0 30px; max-width: 30em; }
+  .lead b { color: var(--white); font-weight: 600; }
+  .download {
+    display: inline-flex; align-items: center; gap: 14px;
+    background: var(--white); color: var(--ink); text-decoration: none;
+    padding: 15px 26px 15px 20px; border-radius: 14px;
+    box-shadow: 0 1px 0 rgba(255,255,255,.6) inset, 0 10px 24px rgba(6, 30, 80, 0.28);
+    transition: transform .15s ease, box-shadow .15s ease;
+  }
+  .download:hover { transform: translateY(-1px); box-shadow: 0 1px 0 rgba(255,255,255,.6) inset, 0 14px 30px rgba(6, 30, 80, 0.34); }
+  .download:active { transform: translateY(0); }
+  .download:focus-visible { outline: 3px solid rgba(255,255,255,.7); outline-offset: 3px; }
+  .download svg { width: 26px; height: 26px; flex: none; }
+  .download .label { display: flex; flex-direction: column; }
+  .download .main { font-size: 17px; font-weight: 600; }
+  .download .meta { font-size: 13px; color: #4A6A9E; margin-top: 2px; }
+  ol { list-style: none; margin: 34px 0 0; padding: 0; display: grid; gap: 14px; max-width: 30em; }
+  li { display: grid; grid-template-columns: 28px 1fr; gap: 14px; align-items: start; font-size: 15.5px; line-height: 1.45; color: var(--soft); }
+  li span {
+    width: 28px; height: 28px; border-radius: 50%; border: 1.5px solid rgba(255,255,255,.55);
+    display: grid; place-items: center; font-size: 13px; font-weight: 600; color: var(--white);
+  }
+  li b { color: var(--white); font-weight: 600; }
+  footer { font-size: 13px; color: rgba(255,255,255,.62); display: flex; gap: 8px; align-items: center; }
+  footer svg { width: 14px; height: 14px; opacity: .8; }
+  @media (max-width: 760px) {
+    main { grid-template-columns: 1fr; gap: 36px; justify-items: center; text-align: center; padding: 24px 0; }
+    .phone { width: 150px; }
+    h1 { font-size: 36px; }
+    .lead, ol { margin-left: auto; margin-right: auto; }
+    li { text-align: left; }
+  }
+</style>
+</head>
+<body>
+  <!-- The app's mark: an arrow dropping into a tray (same shapes as the app icon). -->
+  <svg class="corner" viewBox="20 19 68 68" aria-hidden="true">
+    <path fill="#fff" d="M50,30h8v22h9l-13,14l-13,-14h9z"/><path fill="#fff" d="M32,62h6v8h32v-8h6v14h-44z"/>
+  </svg>
+
+  <div class="page">
+    <header>
+      <svg viewBox="20 19 68 68" aria-hidden="true">
+        <rect x="20" y="19" width="68" height="68" rx="15" fill="#fff"/>
+        <path fill="#1A73E8" d="M50,30h8v22h9l-13,14l-13,-14h9z"/><path fill="#1A73E8" d="M32,62h6v8h32v-8h6v14h-44z"/>
+      </svg>
+      DropCopy
+    </header>
+
+    <main>
+      <!-- The phone, as drawn in the app: dark body, blue screen, the mark in its corner. -->
+      <svg class="phone" viewBox="0 0 196 400" role="img" aria-label="{{PHONE}}">
+        <defs>
+          <linearGradient id="scr" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2B86F5"/><stop offset="1" stop-color="#1460D2"/></linearGradient>
+          <clipPath id="clip"><rect x="10" y="10" width="176" height="380" rx="30"/></clipPath>
+        </defs>
+        <rect x="192" y="96" width="4" height="46" rx="2" fill="#1B1C20"/>
+        <rect x="192" y="160" width="4" height="26" rx="2" fill="#1B1C20"/>
+        <rect x="2" y="2" width="192" height="396" rx="38" fill="#0E0E10"/>
+        <rect x="2.5" y="2.5" width="191" height="395" rx="37.5" fill="none" stroke="#3A3A40"/>
+        <g clip-path="url(#clip)">
+          <rect x="10" y="10" width="176" height="380" fill="url(#scr)"/>
+          <g opacity=".13" transform="translate(96 296) scale(1.9)">
+            <path fill="#fff" d="M50,30h8v22h9l-13,14l-13,-14h9z" transform="translate(-20 -19)"/>
+            <path fill="#fff" d="M32,62h6v8h32v-8h6v14h-44z" transform="translate(-20 -19)"/>
+          </g>
+          <!-- A file dropping toward the PC. -->
+          <g class="arrow" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M98 128v62M74 168l24 24 24-24"/>
+            <path d="M62 204v14h72v-14" stroke-width="6"/>
+          </g>
+          <text x="98" y="268" text-anchor="middle" fill="#fff" font-size="15" font-weight="600" font-family="Segoe UI Variable Display, Segoe UI, system-ui, sans-serif">{{PHONE}}</text>
+          <text x="98" y="290" text-anchor="middle" fill="rgba(255,255,255,.75)" font-size="12.5" font-family="Segoe UI Variable Text, Segoe UI, system-ui, sans-serif">ready to pair</text>
+        </g>
+        <circle cx="98" cy="30" r="6" fill="#050505"/>
+      </svg>
+
+      <section>
+        <h1>Set up this PC</h1>
+        <p class="lead"><b>{{PHONE}}</b> is handing this PC the DropCopy app over your Wi-Fi. The download is already paired with it, so there's no code to scan.</p>
+        <a class="download" href="/DropCopy-Setup.exe" download>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 4v11M7.5 10.5 12 15l4.5-4.5"/><path d="M5 17v3h14v-3"/>
+          </svg>
+          <span class="label"><span class="main">Download DropCopy for Windows</span><span class="meta">DropCopy-Setup.exe · {{SIZE}}</span></span>
+        </a>
+        <ol>
+          <li><span>1</span><div><b>Open the file</b> when the download finishes.</div></li>
+          <li><span>2</span><div>If the browser asks, choose <b>Keep</b>. It came straight from your phone, not the internet.</div></li>
+          <li><span>3</span><div><b>That's it.</b> Your phone connects by itself, and DropCopy waits in the tray.</div></li>
+        </ol>
+      </section>
+    </main>
+
+    <footer>
+      <svg viewBox="0 0 16 16" fill="none" stroke="#fff" stroke-width="1.6" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>
+      Served by your phone on this network. Nothing goes through the internet.
+    </footer>
+  </div>
+</body>
+</html>

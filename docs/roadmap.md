@@ -26,3 +26,12 @@
   serves DropCopy-Setup.exe over the local network with a one-time pairing blob appended to the file (an exe
   still runs with data after it); the PC setup reads it from its own file, finds the phone on the network
   and completes pairing with no scan at all. Not sci-fi: plain LAN HTTP plus the existing protocol.
+
+## Later, maybe: "Type it for me" over Bluetooth (noted 2026-10-31, not decided)
+A PC without DropCopy can't be told to open a page over Bluetooth. The one route: the phone presents
+itself as a Bluetooth keyboard (Android 9+ `BluetoothHidDevice`), and after the user pairs it once in
+Windows' Bluetooth settings it types Win+R, the setup address, Enter. Caveats: the one-time pairing is
+about as much effort as typing the address; a non-English keyboard layout (Hebrew) turns the typed
+address into the wrong letters; not every phone maker enables the profile; a phone that types on a PC
+looks suspicious to people and antivirus. If built: an optional "Type it for me" button, shown only
+where supported, with the typed address staying the main path.

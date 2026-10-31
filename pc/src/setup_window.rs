@@ -66,8 +66,10 @@ pub fn logo_screen(w: u32, h: u32) -> RgbaImage {
 /// are drawn on top of it).
 pub fn logo_screen_faded(w: u32, h: u32, fade: f32) -> RgbaImage {
     let (fw, fh) = (w as f32, h as f32);
-    let size = fw * 1.25; // the logo's 108-unit canvas; its glyph fills most of the width
-    let (ox, oy) = (fw / 2.0 - size / 2.0, fh / 2.0 - size / 2.0);
+    // In the bottom-right corner, running off the edge, as in the big window: clear of whatever is
+    // drawn in the middle (dots, the check, text). The glyph spans 32..76 of its 108-unit canvas.
+    let size = fw * 1.15;
+    let (ox, oy) = (fw * 1.08 - size * 76.0 / 108.0, fh + fw * 0.04 - size * 76.0 / 108.0);
     RgbaImage::from_fn(w, h, |x, y| {
         let g = y as f32 / fh;
         let c = over([0x23 as f32, 0x7E as f32, 0xF0 as f32], [0x12 as f32, 0x5A as f32, 0xC8 as f32], g);
@@ -101,7 +103,7 @@ fn screen_rect(k: f32) -> (f32, f32, f32, f32) {
 pub fn draw_mini(stage: Stage, time: f32, done: f32, s: f32) -> RgbaImage {
     let k = MINI_ZOOM * s;
     let (_, _, sw, sh) = screen_rect(k);
-    let mut screen = logo_screen_faded(sw.round() as u32, sh.round() as u32, 0.13);
+    let mut screen = logo_screen_faded(sw.round() as u32, sh.round() as u32, 0.16);
     let white = [255.0f32; 3];
     for (x, y, p) in screen.enumerate_pixels_mut() {
         let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);

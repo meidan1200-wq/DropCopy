@@ -293,7 +293,8 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             try {
                 byte[] exe = PcSetup.withLink(PcSetup.fetchExe(this), link);
-                PcSetup.Server server = new PcSetup.Server(exe, who -> runOnUiThread(() -> {
+                String page = PcSetup.page(this, Transfer.deviceName(this), exe.length);
+                PcSetup.Server server = new PcSetup.Server(exe, page, who -> runOnUiThread(() -> {
                     if (!open[0]) return;
                     // Downloaded: from now on this phone knows that PC, and waits for it to start.
                     if (Store.pcs(this).isEmpty()) Store.add(this, link);

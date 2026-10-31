@@ -125,11 +125,18 @@ final class PcSetup {
     static final class Server {
         private final ServerSocket sock;
         private final byte[] file;
+        private final byte[] page;
         private final Listener listener;
         private volatile boolean running = true;
 
         Server(byte[] file, Listener listener) throws IOException {
+            this(file, PAGE, listener);
+        }
+
+        /** {@code page}: the HTML shown at "/" (see {@link #page}). */
+        Server(byte[] file, String page, Listener listener) throws IOException {
             this.file = file;
+            this.page = page.getBytes(StandardCharsets.UTF_8);
             this.listener = listener;
             sock = new ServerSocket(PORT);
             new Thread(this::loop, "pc-setup").start();
@@ -157,7 +164,6 @@ final class PcSetup {
                         out.flush();
                         if (listener != null) listener.downloaded(s.getInetAddress().getHostAddress());
                     } else {
-                        byte[] page = PAGE.getBytes(StandardCharsets.UTF_8);
                         out.write(("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " + page.length
                                 + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
                         out.write(page);
@@ -170,7 +176,25 @@ final class PcSetup {
         }
     }
 
-    /** What the PC's browser shows: one button. */
+    /**
+     * The page the PC's browser shows (assets/pc-setup.html), with this phone's name and the
+     * file's size filled in. Falls back to the plain one if the asset can't be read.
+     */
+    static String page(Context c, String phone, long bytes) {
+        try (InputStream in = c.getAssets().open("pc-setup.html")) {
+            String html = new String(readAll(in), StandardCharsets.UTF_8);
+            String size = String.format(java.util.Locale.ROOT, "%.1f MB", bytes / 1048576.0);
+            return html.replace("{{PHONE}}", escape(phone)).replace("{{SIZE}}", size);
+        } catch (IOException e) {
+            return PAGE;
+        }
+    }
+
+    static String escape(String s) {
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
+    }
+
+    /** A plain fallback page: one button. */
     static final String PAGE = "<!doctype html><html><head><meta charset=utf-8><meta name=viewport content='width=device-width'>"
             + "<title>DropCopy for this PC</title><style>"
             + "body{margin:0;min-height:100vh;display:grid;place-items:center;background:linear-gradient(#237EF0,#125AC8);"
