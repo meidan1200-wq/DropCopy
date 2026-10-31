@@ -173,7 +173,8 @@ mod imp {
             Some(p) => format!("{word} · {p}"),
             None => word.to_string(),
         };
-        crate::menu::show((x, y), "DropCopy".into(), status, items, hwnd.0 as usize, phones.len(), dot);
+        // One phone, the last one that connected; its name is in the status line.
+        crate::menu::show((x, y), "DropCopy".into(), status, items, hwnd.0 as usize, phones.len().min(1), dot);
     }
 
     unsafe fn run(hwnd: HWND, cmd: usize) {
