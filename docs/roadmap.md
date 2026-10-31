@@ -22,7 +22,7 @@
   Google Play, opens the store). The page also copies the pairing link to the clipboard; the app reads it
   on its first launch and pairs by itself. With the app installed, Android App Links open the app directly.
   On Google Play the Install Referrer API can carry the pairing through the install instead.
-- **Phone first, then the PC.** The app shows "Set up your PC: open http://<phone-ip>:8080 on it". The phone
+- **Phone first, then the PC.** *(Built after v0.5.0: `PcSetup.java`, `pc/src/handoff.rs`.)* The app shows "Set up your PC: open http://<phone-ip>:8080 on it". The phone
   serves DropCopy-Setup.exe over the local network with a one-time pairing blob appended to the file (an exe
   still runs with data after it); the PC setup reads it from its own file, finds the phone on the network
   and completes pairing with no scan at all. Not sci-fi: plain LAN HTTP plus the existing protocol.

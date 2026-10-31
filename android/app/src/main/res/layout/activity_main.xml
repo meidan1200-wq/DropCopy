@@ -149,6 +149,13 @@
                 android:layout_marginTop="6dp"
                 android:text="Paste a pairing link instead" />
 
+            <Button
+                android:id="@+id/pc_setup"
+                style="@style/Btn.Text"
+                android:layout_width="wrap_content"
+                android:layout_marginStart="-12dp"
+                android:text="No DropCopy on your PC yet?" />
+
             <LinearLayout
                 android:id="@+id/paste_row"
                 android:layout_width="match_parent"

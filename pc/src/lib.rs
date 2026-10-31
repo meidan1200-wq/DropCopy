@@ -30,6 +30,7 @@ pub fn log_to(dir: &std::path::Path) {
 
 pub mod cleanup;
 pub mod client;
+pub mod handoff;
 pub mod clipboard;
 pub mod config;
 pub mod menu;

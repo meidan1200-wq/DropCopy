@@ -127,8 +127,13 @@ fn main() -> ExitCode {
 fn run(a: Args) -> Result<(), String> {
     let home = a.home.clone().unwrap_or_else(default_home);
     let (mut cfg, _) = Config::load_or_create(home).map_err(|e| format!("settings: {e}"))?;
+    // Downloaded from the phone (it appended its pairing to the file): take its key, no scanning.
+    let from_phone = std::env::current_exe().map(|exe| dropcopy::handoff::adopt(&mut cfg, &exe)).unwrap_or(false);
+    if from_phone {
+        say!("  Set up from your phone: it connects by itself in a moment.");
+    }
     match a.cmd.as_deref() {
-        None if cfg!(windows) && !a.hidden && !a.background => launch(cfg, &a),
+        None if cfg!(windows) && !a.hidden && !a.background => launch(cfg, &a, from_phone),
         None | Some("serve") | Some("receive") => serve(cfg, &a),
         Some("pair") => {
             if a.new_key {
@@ -192,9 +197,9 @@ fn run(a: Args) -> Result<(), String> {
 
 /// What a double-click does: the background copy does the receiving, so this window is only a
 /// view of it, and closing it changes nothing.
-fn launch(cfg: Config, a: &Args) -> Result<(), String> {
+fn launch(cfg: Config, a: &Args, from_phone: bool) -> Result<(), String> {
     say!("DropCopy v{} - share on your phone, Ctrl+V on this PC.\n", dropcopy::update::current());
-    let fresh_log = match setup::ensure_background(&cfg) {
+    let fresh_log = match setup::ensure_background(&cfg, from_phone) {
         Ok(setup::Bg::Running) => {
             say!("  Running in the background. It starts with Windows, and closing this window doesn't stop it.");
             false
@@ -213,7 +218,8 @@ fn launch(cfg: Config, a: &Args) -> Result<(), String> {
     if setup::own_console() {
         let log = cfg.home.join("log.txt");
         let start = std::fs::metadata(&log).map(|m| m.len()).unwrap_or(0);
-        let paired = cfg.is_paired();
+        // Set up from the phone: it holds the key already, so no code; just wait for it.
+        let paired = cfg.is_paired() || from_phone;
         let home = cfg.home.clone();
         setup::hide_console();
         dropcopy::setup_window::run(pair::link(&cfg, a.port), paired, move || {
@@ -650,20 +656,24 @@ mod setup {
 
     /// Makes sure the background copy is installed, current and running, without a second copy
     /// ever fighting over the port. Never replaces a newer installed copy with an older download.
-    pub fn ensure_background(cfg: &dropcopy::config::Config) -> Result<Bg, String> {
+    /// `restart`: the key just changed (set up from the phone), so a running copy must start over.
+    pub fn ensure_background(cfg: &dropcopy::config::Config, restart: bool) -> Result<Bg, String> {
         let current = std::env::current_exe().map_err(|e| e.to_string())?;
         let target = installed_exe().ok_or("LOCALAPPDATA is not set")?;
         // A discovery probe, not a test bind: binding would make Windows' firewall ask about this copy.
         let running = dropcopy::client::discover(cfg, std::time::Duration::from_millis(700)).is_ok();
         let installed = target.exists().then(|| installed_version(&target)).flatten();
         if let Some(v) = installed.filter(|v| *v > dropcopy::update::current()) {
-            if running {
+            if running && !restart {
                 return Ok(Bg::Running);
+            }
+            if running {
+                stop_background(); // it still holds the old key
             }
             say!("  (v{v} is installed; starting that one)");
             return if spawn_hidden(&target.display().to_string(), &["--background".to_string()]) { Ok(Bg::Started) } else { Err("could not start it".into()) };
         }
-        if running && registered() && same_file(&current, &target) {
+        if running && !restart && registered() && same_file(&current, &target) {
             return Ok(Bg::Running);
         }
         install_with(false)?;
@@ -802,7 +812,7 @@ mod setup {
         Started,
     }
 
-    pub fn ensure_background(_: &dropcopy::config::Config) -> Result<Bg, String> {
+    pub fn ensure_background(_: &dropcopy::config::Config, _: bool) -> Result<Bg, String> {
         Err("only on Windows".into())
     }
 

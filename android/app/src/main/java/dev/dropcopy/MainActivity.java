@@ -25,6 +25,7 @@ import android.widget.TextView;
 import com.google.mlkit.vision.barcode.common.Barcode;
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions;
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -98,6 +99,7 @@ public class MainActivity extends Activity {
         EditText link = findViewById(R.id.link);
         findViewById(R.id.pair).setOnClickListener(v -> pair(link.getText().toString()));
         findViewById(R.id.battery_allow).setOnClickListener(v -> askBatteryExemption());
+        findViewById(R.id.pc_setup).setOnClickListener(v -> showPcSetup());
         findViewById(R.id.notify_allow).setOnClickListener(v -> askNotifications());
         findViewById(R.id.oem_allow).setOnClickListener(v -> {
             android.content.Intent screen = Oem.autostart(this);
@@ -252,6 +254,91 @@ public class MainActivity extends Activity {
         settingDelete = false;
     }
 
+    // ---- Set up the PC from the phone ------------------------------------------------------
+
+    private PcSetup.Server setupServer;
+
+    /**
+     * No DropCopy on the PC yet: this phone makes the key, serves the PC app with it, and once the
+     * PC has downloaded it, waits for that PC to come up. See PcSetup.
+     */
+    private void showPcSetup() {
+        String address = PcSetup.localAddress();
+        if (address == null) {
+            Transfer.toast(this, "Connect this phone to Wi-Fi first (or turn on its hotspot for the PC)");
+            return;
+        }
+        Dialog d = new Dialog(this);
+        d.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
+        d.setContentView(R.layout.dialog_pc_setup);
+        if (d.getWindow() != null) {
+            d.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+            d.getWindow().setLayout(Math.min(getResources().getDisplayMetrics().widthPixels - dp(32), dp(420)), android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+        TextView status = d.findViewById(R.id.setup_status);
+        ImageView sdot = d.findViewById(R.id.setup_dot);
+        Button done = d.findViewById(R.id.setup_done);
+        ((TextView) d.findViewById(R.id.setup_address)).setText("http://" + address + ":" + PcSetup.PORT);
+        tint(sdot, R.color.idle);
+        String link = PcSetup.newLink();
+        boolean[] open = {true};
+        done.setOnClickListener(v -> d.dismiss());
+        d.setOnDismissListener(x -> {
+            open[0] = false;
+            if (setupServer != null) setupServer.stop();
+            setupServer = null;
+            refresh();
+        });
+        d.show();
+        new Thread(() -> {
+            try {
+                byte[] exe = PcSetup.withLink(PcSetup.fetchExe(this), link);
+                PcSetup.Server server = new PcSetup.Server(exe, who -> runOnUiThread(() -> {
+                    if (!open[0]) return;
+                    // Downloaded: from now on this phone knows that PC, and waits for it to start.
+                    if (Store.pcs(this).isEmpty()) Store.add(this, link);
+                    tint(sdot, R.color.accent);
+                    status.setText("Downloaded by " + who + ". Open DropCopy-Setup.exe on the PC.");
+                    waitForNewPc(d, status, sdot, done, open);
+                }));
+                runOnUiThread(() -> {
+                    if (!open[0]) {
+                        server.stop();
+                        return;
+                    }
+                    setupServer = server;
+                    tint(sdot, R.color.ok);
+                    status.setText("Ready. Open the address on your PC.");
+                });
+            } catch (IOException e) {
+                runOnUiThread(() -> {
+                    tint(sdot, R.color.warn);
+                    status.setText("Couldn't get the PC app (" + e.getMessage() + "). The phone needs internet once for this.");
+                });
+            }
+        }).start();
+    }
+
+    private void waitForNewPc(Dialog d, TextView status, ImageView sdot, Button done, boolean[] open) {
+        new Thread(() -> {
+            for (int i = 0; i < 150 && open[0]; i++) { // ~5 minutes
+                try {
+                    Transfer.run(this, null, null, null, null);
+                    runOnUiThread(() -> {
+                        if (setupServer != null) setupServer.stop();
+                        setupServer = null;
+                        tint(sdot, R.color.ok);
+                        status.setText("Your PC is set up and connected.");
+                        done.setText("Done");
+                    });
+                    return;
+                } catch (IOException e) {
+                    try { Thread.sleep(2000); } catch (InterruptedException ignored) { return; }
+                }
+            }
+        }).start();
+    }
+
     // ---- "Show on PC when near" setup ------------------------------------------------------
 
     /** A small window over the app: what proximity needs, and whether the laptop sees the phone. */
@@ -393,6 +480,7 @@ public class MainActivity extends Activity {
         check.setText("Pair new");
         scan.setText(paired ? "Check connection" : "Scan pairing code");
         findViewById(R.id.paste_toggle).setVisibility(paired ? View.GONE : View.VISIBLE);
+        findViewById(R.id.pc_setup).setVisibility(paired ? View.GONE : View.VISIBLE);
         if (!checking) {
             if (paired) {
                 Proto.Pc pc = pcs.get(0);

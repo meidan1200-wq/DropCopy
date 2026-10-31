@@ -246,6 +246,53 @@ public class AppTest {
         assertEquals("one file listed: " + list, 1, list.trim().split("\n").length);
     }
 
+    /**
+     * The phone serves the PC app with its pairing appended, over plain HTTP. With
+     * DROPCOPY_TEST_EXE (a real program) and DROPCOPY_TEST_OUT set, it writes what a PC downloaded,
+     * so the PC side can be run on it.
+     */
+    @Test
+    public void phoneServesThePcAppWithItsPairing() throws Exception {
+        String exePath = System.getenv("DROPCOPY_TEST_EXE"), out = System.getenv("DROPCOPY_TEST_OUT");
+        byte[] exe = exePath != null ? Files.readAllBytes(new File(exePath).toPath()) : "MZ fake program".getBytes("US-ASCII");
+        String link = PcSetup.newLink();
+        java.util.concurrent.atomic.AtomicReference<String> who = new java.util.concurrent.atomic.AtomicReference<>();
+        PcSetup.Server server;
+        try {
+            server = new PcSetup.Server(PcSetup.withLink(exe, link), who::set);
+        } catch (java.net.BindException e) {
+            org.junit.Assume.assumeTrue("port in use", false);
+            return;
+        }
+        try {
+            java.net.HttpURLConnection page = (java.net.HttpURLConnection) new java.net.URL("http://127.0.0.1:" + PcSetup.PORT + "/").openConnection();
+            String html = new String(readAll(page.getInputStream()), "UTF-8");
+            assertTrue(html.contains("href='/DropCopy-Setup.exe'"));
+            java.net.HttpURLConnection dl = (java.net.HttpURLConnection) new java.net.URL("http://127.0.0.1:" + PcSetup.PORT + "/DropCopy-Setup.exe").openConnection();
+            assertTrue(dl.getHeaderField("Content-Disposition").contains("DropCopy-Setup.exe"));
+            byte[] got = readAll(dl.getInputStream());
+            assertArrayEquals(exe, java.util.Arrays.copyOf(got, exe.length));
+            String tail = new String(got, exe.length, got.length - exe.length - 12, "UTF-8");
+            assertEquals(link, tail);
+            assertEquals("DCSETUP1", new String(got, got.length - 8, 8, "US-ASCII"));
+            for (int k = 0; k < 40 && who.get() == null; k++) Thread.sleep(25);
+            assertEquals("127.0.0.1", who.get());
+            if (out != null) {
+                Files.write(new File(out).toPath(), got);
+                Files.write(new File(out + ".link").toPath(), link.getBytes("UTF-8"));
+            }
+        } finally {
+            server.stop();
+        }
+    }
+
+    private static byte[] readAll(java.io.InputStream in) throws java.io.IOException {
+        java.io.ByteArrayOutputStream o = new java.io.ByteArrayOutputStream();
+        byte[] b = new byte[65536];
+        for (int n; (n = in.read(b)) > 0; ) o.write(b, 0, n);
+        return o.toByteArray();
+    }
+
     @Test
     public void unpairedPhoneShowsNoSettingsYet() {
         MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
