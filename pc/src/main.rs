@@ -203,6 +203,21 @@ fn launch(cfg: Config, a: &Args) -> Result<(), String> {
             return serve(cfg, a);
         }
     };
+    // Double-clicked (this console is ours alone): the setup window instead of the terminal.
+    if setup::own_console() {
+        let log = cfg.home.join("log.txt");
+        let start = std::fs::metadata(&log).map(|m| m.len()).unwrap_or(0);
+        let paired = cfg.is_paired();
+        let home = cfg.home.clone();
+        setup::hide_console();
+        dropcopy::setup_window::run(pair::link(&cfg, a.port), paired, move || {
+            // A phone got through: the log gained a "<-" line since the window opened.
+            let text = std::fs::read(&log).unwrap_or_default();
+            let new = if (text.len() as u64) >= start { &text[start as usize..] } else { &text[..] };
+            String::from_utf8_lossy(new).lines().any(|l| l.starts_with("  <-")) || (!paired && home.join("paired").exists())
+        });
+        return Ok(());
+    }
     say!("  Saving to {}", cfg.save_dir.display());
     let pairing = !cfg.is_paired();
     if pairing {
@@ -561,6 +576,17 @@ mod setup {
         }
     }
 
+    /// True when no other program shares this console: it was opened for us (a double-click).
+    pub fn own_console() -> bool {
+        use windows_sys::Win32::System::Console::GetConsoleProcessList;
+        let mut ids = [0u32; 4];
+        unsafe { GetConsoleProcessList(ids.as_mut_ptr(), 4) == 1 }
+    }
+
+    pub fn hide_console() {
+        unsafe { windows_sys::Win32::System::Console::FreeConsole() };
+    }
+
     pub enum Bg {
         /// Already running, and at least as new as this copy.
         Running,
@@ -723,6 +749,12 @@ mod setup {
     pub fn detach() -> bool {
         false
     }
+
+    pub fn own_console() -> bool {
+        false
+    }
+
+    pub fn hide_console() {}
 
     #[allow(dead_code)] // `launch` only runs on Windows
     pub enum Bg {

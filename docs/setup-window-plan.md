@@ -1,4 +1,4 @@
-# Plan: the setup window (replaces the terminal on double-click)
+# The setup window (built in v0.4.3; phone name still to do)
 
 Decided with the user: one medium window (~480×560), centred on screen, no terminal.
 
