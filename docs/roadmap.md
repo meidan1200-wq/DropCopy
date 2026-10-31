@@ -35,3 +35,12 @@ about as much effort as typing the address; a non-English keyboard layout (Hebre
 address into the wrong letters; not every phone maker enables the profile; a phone that types on a PC
 looks suspicious to people and antivirus. If built: an optional "Type it for me" button, shown only
 where supported, with the typed address staying the main path.
+
+## Self-checks for every release (from real use)
+- **Phone name after an upgrade.** If a v0.5+ phone first reaches a PC still on v0.4.x, it marks that PC
+  "older" and leaves out its name and options for 24 h, so the tray shows the app logo and a plain
+  "Connected" until then (seen 2026-10-31; fine once the phone updated). Next version: let check-ins
+  always try the full records and clear the mark on success. Before releasing, check: phone updated
+  first, PC second → name appears in the tray on the next check-in.
+- **Release builds:** a test that needs a fixed port must skip, not fail, when the port is taken
+  (`Server::discovering()`); stress tests must delete their files (a full disk failed a run).
