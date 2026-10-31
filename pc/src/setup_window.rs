@@ -68,8 +68,9 @@ pub fn logo_screen_faded(w: u32, h: u32, fade: f32) -> RgbaImage {
     let (fw, fh) = (w as f32, h as f32);
     // In the bottom-right corner, running off the edge, as in the big window: clear of whatever is
     // drawn in the middle (dots, the check, text). The glyph spans 32..76 of its 108-unit canvas.
-    let size = fw * 1.15;
-    let (ox, oy) = (fw * 1.08 - size * 76.0 / 108.0, fh + fw * 0.04 - size * 76.0 / 108.0);
+    // Small and whole, never cut by the screen's edge: glyph 34% of the width, inset from the corner.
+    let size = fw * 0.34 * 108.0 / 44.0;
+    let (ox, oy) = (fw * 0.88 - size * 76.0 / 108.0, fh - fw * 0.12 - size * 76.0 / 108.0);
     RgbaImage::from_fn(w, h, |x, y| {
         let g = y as f32 / fh;
         let c = over([0x23 as f32, 0x7E as f32, 0xF0 as f32], [0x12 as f32, 0x5A as f32, 0xC8 as f32], g);
@@ -491,6 +492,25 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_screen_logo_sits_whole_inside_the_corner() {
+        for (w, h) in [(540u32, 1200u32), (140, 300), (18, 38)] {
+            let img = logo_screen_faded(w, h, 0.5);
+            let base = logo_screen_faded(w, h, 0.0);
+            let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
+            for (x, y, p) in img.enumerate_pixels() {
+                if p[0] != base.get_pixel(x, y)[0] {
+                    (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                }
+            }
+            if w < 40 {
+                continue; // the tiny menu phone: a hint, too few pixels to measure
+            }
+            assert!(x1 < w - w / 20 && y1 < h - w / 20, "{w}x{h}: logo reaches the edge ({x1},{y1})");
+            assert!(x0 > w / 2 && y0 > h / 2, "{w}x{h}: logo should be in the bottom-right corner ({x0},{y0})");
+        }
+    }
 
     #[test]
     fn names_the_phone_when_it_says() {

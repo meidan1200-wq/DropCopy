@@ -24,17 +24,16 @@
     -webkit-font-smoothing: antialiased;
     overflow-x: hidden;
   }
-  /* The logo, large and faint in the corner, as in the app's setup window. */
-  .corner {
-    position: fixed; right: -6vmin; bottom: -8vmin;
-    width: 62vmin; height: 62vmin; opacity: 0.08; pointer-events: none;
-  }
   .page {
-    position: relative; min-height: 100%;
+    position: relative; min-height: 100vh;
     display: flex; flex-direction: column;
-    max-width: 1040px; margin: 0 auto; padding: 28px 32px 32px;
+    max-width: 1040px; margin: 0 auto; padding: 72px 32px 32px; /* room under the corner name */
   }
-  header { display: flex; align-items: center; gap: 12px; font-size: 17px; font-weight: 600; letter-spacing: 0.01em; }
+  /* The app's name in the window's top-left corner, a small gap from the edges. */
+  header {
+    position: fixed; top: 22px; left: 24px; z-index: 1;
+    display: flex; align-items: center; gap: 12px; font-size: 17px; font-weight: 600; letter-spacing: 0.01em;
+  }
   header svg { width: 30px; height: 30px; }
   main {
     flex: 1; display: grid; grid-template-columns: auto 1fr; gap: 72px;
@@ -84,11 +83,6 @@
 </style>
 </head>
 <body>
-  <!-- The app's mark: an arrow dropping into a tray (same shapes as the app icon). -->
-  <svg class="corner" viewBox="20 19 68 68" aria-hidden="true">
-    <path fill="#fff" d="M50,30h8v22h9l-13,14l-13,-14h9z"/><path fill="#fff" d="M32,62h6v8h32v-8h6v14h-44z"/>
-  </svg>
-
   <div class="page">
     <header>
       <svg viewBox="20 19 68 68" aria-hidden="true">
@@ -99,7 +93,7 @@
     </header>
 
     <main>
-      <!-- The phone, as drawn in the app: dark body, blue screen, the mark in its corner. -->
+      <!-- The phone, as drawn in the app: dark body, blue screen. -->
       <svg class="phone" viewBox="0 0 196 400" role="img" aria-label="{{PHONE}}">
         <defs>
           <linearGradient id="scr" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2B86F5"/><stop offset="1" stop-color="#1460D2"/></linearGradient>
@@ -111,10 +105,6 @@
         <rect x="2.5" y="2.5" width="191" height="395" rx="37.5" fill="none" stroke="#3A3A40"/>
         <g clip-path="url(#clip)">
           <rect x="10" y="10" width="176" height="380" fill="url(#scr)"/>
-          <g opacity=".13" transform="translate(96 296) scale(1.9)">
-            <path fill="#fff" d="M50,30h8v22h9l-13,14l-13,-14h9z" transform="translate(-20 -19)"/>
-            <path fill="#fff" d="M32,62h6v8h32v-8h6v14h-44z" transform="translate(-20 -19)"/>
-          </g>
           <!-- A file dropping toward the PC. -->
           <g class="arrow" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
             <path d="M98 128v62M74 168l24 24 24-24"/>

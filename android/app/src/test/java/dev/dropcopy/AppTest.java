@@ -268,6 +268,7 @@ public class AppTest {
             java.net.HttpURLConnection page = (java.net.HttpURLConnection) new java.net.URL("http://127.0.0.1:" + PcSetup.PORT + "/").openConnection();
             String html = new String(readAll(page.getInputStream()), "UTF-8");
             assertTrue(html.contains("href=\"/DropCopy-Setup.exe\""));
+            assertTrue("no faded logo on the page (the user's call)", !html.contains("class=\"corner\"") && !html.contains("opacity=\".13\""));
             assertTrue("phone name filled in, escaped", html.contains("Galaxy &lt;S20+&gt;") && !html.contains("{{PHONE}}") && !html.contains("{{SIZE}}"));
             java.net.HttpURLConnection dl = (java.net.HttpURLConnection) new java.net.URL("http://127.0.0.1:" + PcSetup.PORT + "/DropCopy-Setup.exe").openConnection();
             assertTrue(dl.getHeaderField("Content-Disposition").contains("DropCopy-Setup.exe"));

@@ -37,6 +37,13 @@ struct Rig {
     save_dir: PathBuf,
 }
 
+/// Each test's folder (a 512 MB video and its copy among them) goes when the test ends.
+impl Drop for Rig {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
 fn rig(name: &str) -> Rig {
     let dir = temp(name);
     let (mut cfg, _) = Config::load_or_create(dir.join("home")).unwrap();
