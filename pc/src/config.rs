@@ -182,6 +182,18 @@ impl Config {
 }
 
 const PAIRED: &str = "paired";
+const LAST_PHONE: &str = "last-phone.txt";
+
+/// The name of the phone that connected last ("Galaxy S20+"), for the setup window and the tray.
+pub fn remember_phone(home: &Path, name: &str) {
+    if last_phone(home).as_deref() != Some(name) {
+        let _ = fs::write(home.join(LAST_PHONE), name);
+    }
+}
+
+pub fn last_phone(home: &Path) -> Option<String> {
+    fs::read_to_string(home.join(LAST_PHONE)).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
 
 #[cfg(unix)]
 fn restrict_permissions(p: &Path) {

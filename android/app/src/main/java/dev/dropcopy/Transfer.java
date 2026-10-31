@@ -74,24 +74,34 @@ final class Transfer {
         boolean hasOptions = false, hasFile = false;
         for (Proto.Item it : items) {
             hasOptions |= it.options() >= 0;
-            hasFile |= it.options() < 0 && it.text() == null;
+            hasFile |= !it.isRecord();
         }
-        List<Proto.Item> toSend = items;
+        List<Proto.Item> toSend = new ArrayList<>(items);
         if (!hasOptions && hasFile && Store.flag(c, Store.DELETE_AFTER_PASTE)) {
-            toSend = new ArrayList<>(items);
             toSend.add(0, Proto.options(Proto.OPT_DELETE_AFTER_PASTE));
         }
+        toSend.add(0, Proto.device(deviceName(c)));
+        // A PC older than these records refuses them and hangs up mid-send (the phone sees "broken
+        // pipe", not the reason). So after such a failure, send plainly, and if that works, skip
+        // the extras for that PC for a day: it will have updated itself by then.
+        boolean legacy = System.currentTimeMillis() < c.getSharedPreferences("dropcopy", Context.MODE_PRIVATE).getLong(LEGACY_UNTIL, 0);
         Proto.Result r;
-        try {
-            r = Proto.send(pcs, Proto.broadcastAddresses(), routes(c), toSend, progress);
-        } catch (IOException e) {
-            // A PC from before v0.3.3 refuses the options record: send plainly rather than fail.
-            if (toSend == items || e.getMessage() == null || !e.getMessage().contains("unknown record type")) throw e;
+        if (legacy) {
             r = Proto.send(pcs, Proto.broadcastAddresses(), routes(c), items, progress);
+        } else {
+            try {
+                r = Proto.send(pcs, Proto.broadcastAddresses(), routes(c), toSend, progress);
+            } catch (Proto.Unreachable e) {
+                throw e; // not found at all: nothing to do with the records
+            } catch (IOException e) {
+                r = Proto.send(pcs, Proto.broadcastAddresses(), routes(c), items, progress);
+                c.getSharedPreferences("dropcopy", Context.MODE_PRIVATE).edit()
+                        .putLong(LEGACY_UNTIL, System.currentTimeMillis() + 24L * 3600 * 1000).apply();
+            }
         }
         Store.remember(c, r.pc);
         items = new ArrayList<>(items);
-        items.removeIf(it -> it.options() >= 0);
+        items.removeIf(it -> it.options() >= 0 || it.device() != null);
         if (items.isEmpty()) return "Connected to " + r.pc.name + " (" + r.totalMillis + " ms)";
         String what = items.size() == 1 ? (items.get(0).text() != null ? "Text" : items.get(0).name()) : items.size() + " items";
         return what + " → " + r.pc.name + " · " + human(r.bytes) + " · " + r.totalMillis + " ms";
@@ -105,6 +115,16 @@ final class Transfer {
      * Racing them all needs no guess about which case this is; a dead path simply loses.
      */
     @SuppressWarnings("deprecation")
+    private static final String LEGACY_UNTIL = "legacy_pc_until";
+
+    /** The name the user sees for this phone (Samsung: "Galaxy S20+"), else the model. */
+    static String deviceName(Context c) {
+        String n = null;
+        try { n = android.provider.Settings.Global.getString(c.getContentResolver(), android.provider.Settings.Global.DEVICE_NAME); } catch (RuntimeException ignored) { }
+        if (n == null || n.trim().isEmpty()) n = android.os.Build.MODEL;
+        return n == null ? "Phone" : n.trim();
+    }
+
     static List<Proto.Route> routes(Context c) {
         List<Proto.Route> out = new ArrayList<>();
         ConnectivityManager cm = c.getSystemService(ConnectivityManager.class);

@@ -338,7 +338,7 @@ public class AppTest {
         byte[] data = new byte[2_500_000];
         new Random(7).nextBytes(data);
         Uri uri = Uri.parse("content://dev.dropcopy.test/photo");
-        shadowOf(app.getContentResolver()).registerInputStream(uri, new ByteArrayInputStream(data));
+        shadowOf(app.getContentResolver()).registerInputStreamSupplier(uri, () -> new ByteArrayInputStream(data)); // fresh per open, like a real file
         File[] before = new File(dir).listFiles();
         int countBefore = before == null ? 0 : before.length;
 
@@ -374,7 +374,7 @@ public class AppTest {
         byte[] data = new byte[300_000];
         new Random(11).nextBytes(data);
         Uri uri = Uri.parse("content://dev.dropcopy.test/queued");
-        shadowOf(app.getContentResolver()).registerInputStream(uri, new ByteArrayInputStream(data));
+        shadowOf(app.getContentResolver()).registerInputStreamSupplier(uri, () -> new ByteArrayInputStream(data)); // fresh per open, like a real file
         try {
             Transfer.run(app, Collections.singletonList(uri), null, null, null);
             throw new AssertionError("expected the PC to be unreachable");

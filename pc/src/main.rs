@@ -1,3 +1,4 @@
+#![cfg_attr(all(windows, feature = "gui"), windows_subsystem = "windows")]
 use dropcopy::client::{self, Item};
 use dropcopy::clipboard::ClipMode;
 use dropcopy::config::{default_home, Config};
@@ -55,6 +56,8 @@ struct Args {
     background: bool,
     /// `send`: T_OPTS flags, for trying the phone's options from a terminal (`--opts 2`).
     opts: Option<u8>,
+    /// `send`: introduce this sender by name, like a phone does (`--as "Galaxy S20+"`).
+    device: Option<String>,
 }
 
 fn parse() -> Result<Args, String> {
@@ -72,6 +75,7 @@ fn parse() -> Result<Args, String> {
         hidden: false,
         background: false,
         opts: None,
+        device: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -88,6 +92,7 @@ fn parse() -> Result<Args, String> {
             "--png" => a.png = true,
             "--invert" => a.invert = true,
             "--hidden" => a.hidden = true,
+            "--as" => a.device = Some(value("--as")?),
             "--opts" => a.opts = Some(value("--opts")?.parse().map_err(|_| "--opts needs a number")?),
             "--background" => a.background = true,
             s if s.starts_with("--") => return Err(format!("unknown option {s}")),
@@ -99,6 +104,7 @@ fn parse() -> Result<Args, String> {
 }
 
 fn main() -> ExitCode {
+    setup::attach_terminal();
     let args = match parse() {
         Ok(a) => a,
         Err(e) => {
@@ -214,7 +220,8 @@ fn launch(cfg: Config, a: &Args) -> Result<(), String> {
             // A phone got through: the log gained a "<-" line since the window opened.
             let text = std::fs::read(&log).unwrap_or_default();
             let new = if (text.len() as u64) >= start { &text[start as usize..] } else { &text[..] };
-            String::from_utf8_lossy(new).lines().any(|l| l.starts_with("  <-")) || (!paired && home.join("paired").exists())
+            let got = String::from_utf8_lossy(new).lines().any(|l| l.starts_with("  <-")) || (!paired && home.join("paired").exists());
+            got.then(|| dropcopy::config::last_phone(&home).unwrap_or_default())
         });
         return Ok(());
     }
@@ -434,7 +441,8 @@ fn near_diagnostic(cfg: &Config) -> Result<(), String> {
 }
 
 fn send(cfg: &mut Config, a: &Args) -> Result<(), String> {
-    let mut items: Vec<Item> = a.opts.map(Item::Options).into_iter().collect();
+    let mut items: Vec<Item> = a.device.clone().map(Item::Device).into_iter().collect();
+    items.extend(a.opts.map(Item::Options));
     items.extend(a.texts.iter().cloned().map(Item::Text));
     for f in &a.rest {
         let p = PathBuf::from(f);
@@ -576,8 +584,37 @@ mod setup {
         }
     }
 
-    /// True when no other program shares this console: it was opened for us (a double-click).
+    static FROM_TERMINAL: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    /// The app build has no console of its own. Started from a terminal, it borrows that terminal's
+    /// so commands still print there; double-clicked, there is none and nothing flashes.
+    pub fn attach_terminal() {
+        if !cfg!(feature = "gui") {
+            return;
+        }
+        use windows_sys::Win32::Storage::FileSystem::*;
+        use windows_sys::Win32::System::Console::*;
+        unsafe {
+            if AttachConsole(ATTACH_PARENT_PROCESS) == 0 {
+                return;
+            }
+            FROM_TERMINAL.store(true, std::sync::atomic::Ordering::SeqCst);
+            let name: Vec<u16> = "CONOUT$\0".encode_utf16().collect();
+            let h = CreateFileW(name.as_ptr(), 0x4000_0000 | 0x8000_0000, FILE_SHARE_READ | FILE_SHARE_WRITE, std::ptr::null(), OPEN_EXISTING, 0, std::ptr::null_mut());
+            if !h.is_null() && h != windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+                SetStdHandle(STD_OUTPUT_HANDLE, h);
+                SetStdHandle(STD_ERROR_HANDLE, h);
+            }
+            // The terminal printed its prompt already (it doesn't wait for an app build): start on a fresh line.
+            println!();
+        }
+    }
+
+    /// True when started by a double-click rather than from a terminal.
     pub fn own_console() -> bool {
+        if cfg!(feature = "gui") {
+            return !FROM_TERMINAL.load(std::sync::atomic::Ordering::SeqCst);
+        }
         use windows_sys::Win32::System::Console::GetConsoleProcessList;
         let mut ids = [0u32; 4];
         unsafe { GetConsoleProcessList(ids.as_mut_ptr(), 4) == 1 }
@@ -753,6 +790,8 @@ mod setup {
     pub fn own_console() -> bool {
         false
     }
+
+    pub fn attach_terminal() {}
 
     pub fn hide_console() {}
 

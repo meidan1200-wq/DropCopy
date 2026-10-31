@@ -46,6 +46,7 @@ pub const T_FILE_END: u8 = 0x03; // current file is complete
 pub const T_TEXT: u8 = 0x04; // utf-8 text for the clipboard
 pub const T_END: u8 = 0x05; // sender is done
 pub const T_OPTS: u8 = 0x06; // flags u8, before any file: how to treat this transfer
+pub const T_DEVICE: u8 = 0x07; // utf-8, at most 64 bytes: the phone's own name ("Galaxy S20+")
 /// `T_OPTS` flags.
 pub const OPT_NEARBY: u8 = 0x01; // a proximity preview: temporary, shown on the taskbar phone only
 pub const OPT_DELETE_AFTER_PASTE: u8 = 0x02; // remove the file once pasted (or the clipboard moves on)

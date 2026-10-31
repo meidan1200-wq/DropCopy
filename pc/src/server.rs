@@ -33,6 +33,8 @@ pub struct Received {
     pub nearby: bool,
     /// Delete the files once pasted, or once something else is copied.
     pub delete_after_paste: bool,
+    /// The phone's name, if it said (v0.5+).
+    pub device: Option<String>,
 }
 
 pub struct Server {
@@ -91,12 +93,15 @@ impl Server {
                     }
                 }
                 let _slot = Slot(active);
-                let peer = stream.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
+                let mut peer = stream.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
                 let t0 = Instant::now();
                 match handle(stream, &cfg) {
                     Ok(r) => {
                         // Only a phone holding the key gets this far: it is paired.
                         cfg.mark_paired();
+                        if let Some(d) = &r.device {
+                            crate::config::remember_phone(&cfg.home, d);
+                        }
                         crate::popup::hide_code();
                         if r.nearby {
                             // Brought close: show it on the little phone; nothing touches the clipboard.
@@ -113,6 +118,9 @@ impl Server {
                             crate::cleanup::track(&r.files);
                         } else if !r.files.is_empty() {
                             crate::popup::remember(&r.files);
+                        }
+                        if let Some(d) = &r.device {
+                            peer = format!("{d} ({peer})");
                         }
                         report(&r, &peer, t0, clip, &lock)
                     }
@@ -281,6 +289,10 @@ fn receive(
                 got.files.push(std::path::absolute(&dest).unwrap_or(dest));
             }
             T_TEXT => got.texts.push(String::from_utf8_lossy(body).into_owned()),
+            T_DEVICE => {
+                let name: String = String::from_utf8_lossy(body).chars().filter(|c| !c.is_control()).take(64).collect();
+                got.device = Some(name.trim().to_string()).filter(|n| !n.is_empty());
+            }
             T_OPTS => {
                 let flags = body.first().copied().unwrap_or(0);
                 got.nearby = flags & OPT_NEARBY != 0;

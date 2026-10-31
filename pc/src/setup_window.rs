@@ -57,11 +57,23 @@ fn over(c: [f32; 3], with: [f32; 3], k: f32) -> [f32; 3] {
 }
 
 /// Where the text goes (for GDI), in output pixels: (y of the line, size in px).
-pub fn text_lines(stage: Stage, s: f32) -> Vec<(f32, f32, &'static str)> {
+pub fn text_lines(stage: Stage, s: f32, phone: Option<&str>) -> Vec<(f32, f32, String)> {
+    let hint = |t: &str| (H * s - 70.0 * s, 15.0 * s, t.to_string());
     match stage {
-        Stage::Scan => vec![(46.0 * s, 30.0 * s, "Scan me"), (H * s - 70.0 * s, 15.0 * s, "Open DropCopy on your phone and point it here")],
-        Stage::Waiting => vec![(H * s / 2.0 + 60.0 * s, 20.0 * s, "Looking for your phone"), (H * s - 70.0 * s, 15.0 * s, "Open DropCopy on the phone, or share a photo to it")],
-        Stage::Connected => vec![(H * s / 2.0 + 70.0 * s, 24.0 * s, "Phone connected"), (H * s - 70.0 * s, 15.0 * s, "DropCopy keeps running in the tray")],
+        Stage::Scan => vec![(46.0 * s, 30.0 * s, "Scan me".into()), hint("Open DropCopy on your phone and point it here")],
+        Stage::Waiting => vec![(H * s / 2.0 + 60.0 * s, 20.0 * s, "Looking for your phone".into()), hint("Open DropCopy on the phone, or share a photo to it")],
+        Stage::Connected => vec![
+            (H * s / 2.0 + 70.0 * s, 24.0 * s, connected_line(phone)),
+            hint("DropCopy keeps running in the tray"),
+        ],
+    }
+}
+
+/// "Connected to Galaxy S20+", or a plain line for a phone that doesn't say its name (older app).
+pub fn connected_line(phone: Option<&str>) -> String {
+    match phone {
+        Some(n) if !n.is_empty() => format!("Connected to {n}"),
+        _ => "Phone connected".into(),
     }
 }
 
@@ -131,13 +143,14 @@ pub fn draw(stage: Stage, time: f32, done: f32, code: Option<&RgbaImage>, s: f32
 
 /// Opens the window and runs until it is closed or fades after the phone connects.
 /// `connected` is polled to move from Scan/Waiting to Connected.
-pub fn run(link: String, paired: bool, connected: impl Fn() -> bool) {
+/// `connected` is polled: `Some(name)` once a phone got through (`name` may be empty).
+pub fn run(link: String, paired: bool, connected: impl Fn() -> Option<String>) {
     imp::run(link, paired, &connected);
 }
 
 #[cfg(not(windows))]
 mod imp {
-    pub fn run(_: String, _: bool, _: &dyn Fn() -> bool) {}
+    pub fn run(_: String, _: bool, _: &dyn Fn() -> Option<String>) {}
 }
 
 #[cfg(windows)]
@@ -174,7 +187,7 @@ mod imp {
         }
     }
 
-    unsafe fn present(hwnd: HWND, img: &RgbaImage, stage: Stage, s: f32, alpha: f32, pos: (i32, i32)) {
+    unsafe fn present(hwnd: HWND, img: &RgbaImage, stage: Stage, phone: Option<&str>, s: f32, alpha: f32, pos: (i32, i32)) {
         let (w, h) = (img.width() as i32, img.height() as i32);
         let bmi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER { biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32, biWidth: w, biHeight: -h, biPlanes: 1, biBitCount: 32, biCompression: BI_RGB.0, ..Default::default() },
@@ -188,7 +201,7 @@ mod imp {
         let old = SelectObject(dc, bmp);
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, COLORREF(0x00FFFFFF));
-        for (y, size, line) in text_lines(stage, s) {
+        for (y, size, line) in text_lines(stage, s, phone) {
             let weight = if size > 18.0 * s { 600 } else { 400 };
             let f = CreateFontW(-(size as i32), 0, 0, 0, weight, 0, 0, 0, DEFAULT_CHARSET.0 as u32, OUT_DEFAULT_PRECIS.0 as u32, CLIP_DEFAULT_PRECIS.0 as u32, ANTIALIASED_QUALITY.0 as u32, 0, w!("Segoe UI Variable Display"));
             let o = SelectObject(dc, f);
@@ -213,7 +226,7 @@ mod imp {
         let _ = DeleteObject(bmp);
     }
 
-    pub fn run(link: String, paired: bool, connected: &dyn Fn() -> bool) {
+    pub fn run(link: String, paired: bool, connected: &dyn Fn() -> Option<String>) {
         unsafe {
             let _ = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
             let s = GetDpiForSystem().max(96) as f32 / 96.0;
@@ -239,11 +252,12 @@ mod imp {
             let pos = ((sw - w) / 2, (sh - h) / 2);
             // A taskbar button (not a tool window), so it can be found and closed like an app.
             let Ok(hwnd) = CreateWindowExW(WS_EX_LAYERED | WS_EX_APPWINDOW, class, w!("DropCopy"), WS_POPUP | WS_SYSMENU, pos.0, pos.1, w, h, None, None, instance, None) else { return };
+            let mut phone: Option<String> = None;
             let mut stage = if paired { Stage::Waiting } else { Stage::Scan };
             let t0 = Instant::now();
             let mut done_at: Option<Instant> = None;
             let mut last_poll = Instant::now();
-            present(hwnd, &draw(stage, 0.0, 0.0, code.as_ref(), s), stage, s, 0.0, pos);
+            present(hwnd, &draw(stage, 0.0, 0.0, code.as_ref(), s), stage, None, s, 0.0, pos);
             let _ = ShowWindow(hwnd, SW_SHOW);
             let _ = SetForegroundWindow(hwnd);
             let mut msg = MSG::default();
@@ -257,7 +271,8 @@ mod imp {
                 }
                 if done_at.is_none() && last_poll.elapsed().as_millis() > 400 {
                     last_poll = Instant::now();
-                    if connected() {
+                    if let Some(n) = connected() {
+                        phone = Some(n);
                         stage = Stage::Connected;
                         done_at = Some(Instant::now());
                     }
@@ -278,7 +293,7 @@ mod imp {
                 // The phone with the code is still: redraw it only while fading in.
                 let animating = stage != Stage::Scan || fade_in < 1.0;
                 if animating {
-                    present(hwnd, &draw(stage, time, done.min(1.0), code.as_ref(), s), stage, s, alpha, pos);
+                    present(hwnd, &draw(stage, time, done.min(1.0), code.as_ref(), s), stage, phone.as_deref(), s, alpha, pos);
                 }
                 std::thread::sleep(std::time::Duration::from_millis(if animating { 16 } else { 100 }));
             }
@@ -289,6 +304,13 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_the_phone_when_it_says() {
+        assert_eq!(connected_line(Some("Galaxy S20+")), "Connected to Galaxy S20+");
+        assert_eq!(connected_line(Some("")), "Phone connected");
+        assert_eq!(connected_line(None), "Phone connected");
+    }
 
     #[test]
     fn each_stage_draws_a_rounded_blue_window() {

@@ -48,7 +48,7 @@ public final class Proto {
 
     static final byte T_FILE = 0x01, T_DATA = 0x02, T_FILE_END = 0x03, T_TEXT = 0x04, T_END = 0x05;
     static final byte T_OK = 0x10, T_ERR = 0x11;
-    static final byte T_OPTS = 0x06;
+    static final byte T_OPTS = 0x06, T_DEVICE = 0x07;
     /** {@link #options} flags: a proximity preview (temporary), and "delete from the PC after pasting". */
     public static final int OPT_NEARBY = 0x01, OPT_DELETE_AFTER_PASTE = 0x02;
     static final byte[] HELLO = ascii("DCH1"), PULL = ascii("DCU1"),
@@ -132,6 +132,30 @@ public final class Proto {
         default String text() { return null; }
         /** T_OPTS flags for an options item, else -1. */
         default int options() { return -1; }
+        /** This phone's name, for a device item; else null. */
+        default String device() { return null; }
+        /** Not a file: options, the device name, or text. */
+        default boolean isRecord() { return options() >= 0 || device() != null || text() != null; }
+    }
+
+    /** Tells the PC this phone's name ("Galaxy S20+"), shown when it connects. */
+    public static Item device(final String name) {
+        return new Item() {
+            public String name() { return "device"; }
+            public String mime() { return ""; }
+            public long size() { return 0; }
+            public InputStream open() { throw new UnsupportedOperationException(); }
+            public String device() { return name; }
+        };
+    }
+
+    /** At most 64 bytes of UTF-8, cut on a character boundary. */
+    static byte[] utf8Upto64(String s) {
+        byte[] b = s.getBytes(StandardCharsets.UTF_8);
+        if (b.length <= 64) return b;
+        int n = 64;
+        while (n > 0 && (b[n] & 0xC0) == 0x80) n--;
+        return java.util.Arrays.copyOf(b, n);
     }
 
     /** Tells the PC how to treat the files that follow. */
@@ -611,6 +635,10 @@ public final class Proto {
             for (Item it : items) {
                 if (it.options() >= 0) {
                     tx.write(out, T_OPTS, new byte[]{(byte) it.options()});
+                    continue;
+                }
+                if (it.device() != null) {
+                    tx.write(out, T_DEVICE, utf8Upto64(it.device()));
                     continue;
                 }
                 if (it.text() != null) {

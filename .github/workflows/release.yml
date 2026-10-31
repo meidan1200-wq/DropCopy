@@ -27,12 +27,21 @@ jobs:
           grep -m1 '^version' pc/Cargo.toml
       - run: cargo test --release
         working-directory: pc
-      - run: cargo build --release
+      # Two builds of the same code: the app (no console, nothing flashes on a double-click or at
+      # sign-in) and the command-line one for typing commands in a terminal.
+      - shell: bash
         working-directory: pc
+        run: |
+          cargo build --release
+          cp target/release/dropcopy.exe dropcopy-cli.exe
+          cargo build --release --features gui
+          cp target/release/dropcopy.exe dropcopy.exe
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: pc/target/release/dropcopy.exe
+          path: |
+            pc/dropcopy.exe
+            pc/dropcopy-cli.exe
 
   android:
     runs-on: ubuntu-latest
@@ -84,7 +93,8 @@ jobs:
             DropCopy-Setup.exe
             DropCopy.apk
             dropcopy.exe
+            dropcopy-cli.exe
           body: |
-            **PC (Windows 10/11):** download `DropCopy-Setup.exe` and double-click it. It installs itself, starts with Windows, runs in the background with an icon in the tray, and updates itself from here on. (`dropcopy.exe` is the same file, used by the built-in updater.)
+            **PC (Windows 10/11):** download `DropCopy-Setup.exe` and double-click it. It installs itself, starts with Windows, runs in the background with an icon in the tray, and updates itself from here on. (`dropcopy.exe` is the same file, used by the built-in updater; `dropcopy-cli.exe` is for typing `dropcopy` commands in a terminal.)
             **Phone (Android 10+):** install `DropCopy.apk`, open it and scan the QR code the PC shows. It updates itself from here on.
             Share a photo to DropCopy and press Ctrl+V on the PC. Hold the phone by your laptop to bring up your newest photo on the little phone above the taskbar, and drag it into any app.
