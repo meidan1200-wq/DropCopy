@@ -298,6 +298,7 @@ fn serve(cfg: Config, a: &Args) -> Result<(), String> {
         name: cfg.name.clone(),
         save_dir: cfg.save_dir.clone(),
         link: pair::link(&cfg, server.port),
+        update: update_from_tray,
     });
     if cfg.near && cfg.popup {
         let me = cfg.clone();
@@ -347,6 +348,18 @@ fn start_updater(install: bool) {
             std::thread::sleep(std::time::Duration::from_secs(6 * 3600));
         }
     });
+}
+
+/// The tray's "Check for updates": install the newest release now and start it.
+fn update_from_tray() -> Result<Option<String>, String> {
+    use dropcopy::update;
+    let Some(rel) = update::check()? else { return Ok(None) };
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let v = update::apply(&exe, &rel)?;
+    if !setup::restart(&exe) {
+        return Err(format!("v{v} is installed and starts the next time you sign in"));
+    }
+    Ok(Some(v.to_string()))
 }
 
 fn update_now() -> Result<(), String> {
@@ -480,15 +493,71 @@ mod setup {
         Some(std::path::PathBuf::from(base).join("DropCopy").join("dropcopy.exe"))
     }
 
+    /// Every other DropCopy process: any version, from any folder, under any download name
+    /// ("dropcopy (1).exe"), receiving or just showing a window. Never this one.
+    fn other_copies() -> Vec<u32> {
+        use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::System::Diagnostics::ToolHelp::*;
+        let me = std::process::id();
+        let mut out = vec![];
+        unsafe {
+            let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snap == INVALID_HANDLE_VALUE {
+                return out;
+            }
+            let mut e: PROCESSENTRY32W = std::mem::zeroed();
+            e.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            let mut more = Process32FirstW(snap, &mut e) != 0;
+            while more {
+                let len = e.szExeFile.iter().position(|c| *c == 0).unwrap_or(e.szExeFile.len());
+                let name = String::from_utf16_lossy(&e.szExeFile[..len]);
+                if e.th32ProcessID != me && dropcopy::util::is_dropcopy_exe(&name) {
+                    out.push(e.th32ProcessID);
+                }
+                more = Process32NextW(snap, &mut e) != 0;
+            }
+            CloseHandle(snap);
+        }
+        out
+    }
+
+    /// Stops every other copy, so an update never leaves two running. Asks first (a receiver
+    /// quits on its own), then ends whatever is left, older versions included.
     fn stop_background() {
-        // Asks it to quit (from this machine only), then makes sure for copies too old to know how.
-        // The background copy is the installed one; an interactive window elsewhere keeps running.
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::*;
         if let Ok(s) = std::net::UdpSocket::bind("127.0.0.1:0") {
             let _ = s.send_to(dropcopy::proto::STOP_MAGIC, ("127.0.0.1", dropcopy::proto::UDP_PORT));
         }
-        if let Some(exe) = installed_exe() {
-            let filter = format!("$p = '{}'; Get-Process dropcopy -ErrorAction SilentlyContinue | Where-Object Path -eq $p | Stop-Process -Force", exe.display());
-            quiet(Command::new("powershell").args(["-NoProfile", "-Command", &filter]));
+        for _ in 0..10 {
+            if other_copies().is_empty() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        for pid in other_copies() {
+            unsafe {
+                let h = OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, 0, pid);
+                if !h.is_null() {
+                    TerminateProcess(h, 0);
+                    WaitForSingleObject(h, 3000); // until its files and port are free
+                    CloseHandle(h);
+                }
+            }
+        }
+    }
+
+    /// One setup at a time, even if the exe is double-clicked twice.
+    fn setup_lock() -> Option<windows_sys::Win32::Foundation::HANDLE> {
+        use windows_sys::Win32::System::Threading::*;
+        let name: Vec<u16> = "Local\\DropCopySetup\0".encode_utf16().collect();
+        unsafe {
+            let m = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
+            if m.is_null() {
+                return None;
+            }
+            WaitForSingleObject(m, 30_000);
+            Some(m)
         }
     }
 
@@ -542,6 +611,7 @@ mod setup {
     }
 
     fn install_with(verbose: bool) -> Result<(), String> {
+        let _lock = setup_lock(); // released when this process ends
         let current = std::env::current_exe().map_err(|e| e.to_string())?;
         let target = installed_exe().ok_or("LOCALAPPDATA is not set")?;
         stop_background();

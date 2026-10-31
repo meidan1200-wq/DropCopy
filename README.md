@@ -61,7 +61,14 @@ window in the app shows the live signal; `dropcopy set near_rssi -50` makes "clo
 farther (lower). `dropcopy set popup off` turns the little phone off.
 
 **The tray icon.** DropCopy's icon (the same as the phone app's) sits in the notification area while it runs.
-Click it to open the received pictures; right-click to show the pairing code or quit.
+Click it to open the received pictures; right-click to show the pairing code, **check for updates** (it
+installs the new version and restarts, with a Windows notification saying what happened), or quit. That menu
+is the only window-style part of the PC side; everything else is the terminal.
+
+**Updating by running a new exe** never leaves two copies: setup first asks every other DropCopy process
+to quit (any version, any folder, any download name such as `dropcopy (1).exe`), ends whatever is left,
+then swaps the installed copy and starts one. Two setups at once take turns. A download older than what is
+installed never replaces it.
 
 **Delete from PC after pasting** (phone app, asks twice). Pictures you send are deleted from
 Pictures\DropCopy 30 seconds after the first paste, or 5 seconds after you copy anything else on the PC, or

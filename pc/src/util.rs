@@ -1,5 +1,12 @@
 use std::path::{Path, PathBuf};
 
+/// A DropCopy program file name, as Windows lists it: "dropcopy.exe", a renamed download such as
+/// "dropcopy (1).exe" or "DropCopy-v0.3.0.exe", or the ".old"/".new" copies an update leaves.
+pub fn is_dropcopy_exe(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n.starts_with("dropcopy") && n.ends_with(".exe")
+}
+
 pub fn hex(b: &[u8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
@@ -134,6 +141,16 @@ pub fn mime_for(path: &Path) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognises_every_copy_of_itself_and_nothing_else() {
+        for n in ["dropcopy.exe", "DropCopy.EXE", "dropcopy (1).exe", "dropcopy-v0.3.0.exe", "dropcopy.old.exe", "dropcopy.new.exe"] {
+            assert!(is_dropcopy_exe(n), "{n}");
+        }
+        for n in ["explorer.exe", "dropbox.exe", "mydropcopy.exe", "dropcopy.txt", "dropcopy"] {
+            assert!(!is_dropcopy_exe(n), "{n}");
+        }
+    }
 
     #[test]
     fn sanitize() {

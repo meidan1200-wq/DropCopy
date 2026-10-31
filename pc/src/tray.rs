@@ -1,5 +1,6 @@
 //! The icon in the notification area (system tray): shows DropCopy is running, with the app's own
-//! icon. Click it to open the received pictures; right-click for the pairing code or to quit.
+//! icon. Click it to open the received pictures; right-click for the pairing code, an update
+//! check, or to quit. This menu is the only window-style UI on the PC; the rest is the terminal.
 
 use std::path::PathBuf;
 
@@ -8,6 +9,9 @@ pub struct Info {
     pub save_dir: PathBuf,
     /// The pairing link, for "Show pairing code".
     pub link: String,
+    /// Checks for a newer release and installs it: `Ok(None)` up to date, `Ok(Some(v))` installed
+    /// and the new copy started (this one should now quit).
+    pub update: fn() -> Result<Option<String>, String>,
 }
 
 /// Adds the icon; it stays until the process ends.
@@ -41,6 +45,12 @@ mod imp {
     const ID_OPEN: usize = 1;
     const ID_PAIR: usize = 2;
     const ID_QUIT: usize = 3;
+    const ID_UPDATE: usize = 4;
+    const NIIF_USER: u32 = 4;
+    const NIIF_LARGE_ICON: u32 = 0x20;
+    /// The tray window, so the update thread can show its result.
+    static HWND_TRAY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    static UPDATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     const NIN_SELECT: u32 = WM_USER;
     const NIN_KEYSELECT: u32 = WM_USER + 1;
 
@@ -84,6 +94,48 @@ mod imp {
         let _ = Shell_NotifyIconW(NIM_SETVERSION, &d);
     }
 
+    fn copy_wide(dst: &mut [u16], s: &str) {
+        let w: Vec<u16> = s.encode_utf16().take(dst.len() - 1).chain(Some(0)).collect();
+        dst[..w.len()].copy_from_slice(&w);
+    }
+
+    /// A Windows notification from the tray icon (it goes to the notification centre).
+    unsafe fn notify(title: &str, text: &str) {
+        let hwnd = HWND(HWND_TRAY.load(std::sync::atomic::Ordering::SeqCst) as _);
+        if hwnd.0.is_null() {
+            return;
+        }
+        let mut d = data(hwnd);
+        d.uFlags = NIF_INFO;
+        copy_wide(&mut d.szInfoTitle, title);
+        copy_wide(&mut d.szInfo, text);
+        d.dwInfoFlags = NOTIFY_ICON_INFOTIP_FLAGS(NIIF_USER | NIIF_LARGE_ICON);
+        let _ = Shell_NotifyIconW(NIM_MODIFY, &d);
+    }
+
+    /// Off the UI thread: checking takes a moment and downloading longer.
+    fn check_for_update() {
+        use std::sync::atomic::Ordering::SeqCst;
+        if UPDATING.swap(true, SeqCst) {
+            return;
+        }
+        let Some(update) = INFO.get().map(|i| i.update) else { return };
+        std::thread::spawn(move || unsafe {
+            match update() {
+                Ok(None) => notify("DropCopy is up to date", &format!("You have the latest version, v{}.", crate::update::current())),
+                Ok(Some(v)) => {
+                    notify("DropCopy updated", &format!("Now running v{v}."));
+                    std::thread::sleep(std::time::Duration::from_millis(1500));
+                    remove(HWND(HWND_TRAY.load(SeqCst) as _));
+                    crate::say!("  updated to v{v} from the tray; restarting");
+                    std::process::exit(0);
+                }
+                Err(e) => notify("Couldn't update DropCopy", &e),
+            }
+            UPDATING.store(false, SeqCst);
+        });
+    }
+
     unsafe fn remove(hwnd: HWND) {
         let d = data(hwnd);
         let _ = Shell_NotifyIconW(NIM_DELETE, &d);
@@ -104,6 +156,9 @@ mod imp {
         let _ = AppendMenuW(m, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(m, MF_STRING, ID_OPEN, w!("Open received pictures"));
         let _ = AppendMenuW(m, MF_STRING, ID_PAIR, w!("Show pairing code"));
+        let label = wide(&format!("Check for updates (v{})", crate::update::current()));
+        let busy = UPDATING.load(std::sync::atomic::Ordering::SeqCst);
+        let _ = AppendMenuW(m, if busy { MF_STRING | MF_GRAYED } else { MF_STRING }, ID_UPDATE, PCWSTR(label.as_ptr()));
         let _ = AppendMenuW(m, MF_SEPARATOR, 0, None);
         let _ = AppendMenuW(m, MF_STRING, ID_QUIT, w!("Quit (starts again when you sign in)"));
         // Without this the menu does not close when clicking elsewhere.
@@ -118,6 +173,7 @@ mod imp {
                     crate::popup::show_code(i.link.clone());
                 }
             }
+            ID_UPDATE => check_for_update(),
             ID_QUIT => {
                 remove(hwnd);
                 crate::say!("  quit from the tray icon");
@@ -172,6 +228,7 @@ mod imp {
             let Ok(hwnd) = CreateWindowExW(WINDOW_EX_STYLE(0), class, w!("DropCopy"), WS_OVERLAPPED, 0, 0, 0, 0, None, None, instance, None) else {
                 return;
             };
+            HWND_TRAY.store(hwnd.0 as usize, std::sync::atomic::Ordering::SeqCst);
             add(hwnd);
             let mut msg = MSG::default();
             while GetMessageW(&mut msg, None, 0, 0).as_bool() {
