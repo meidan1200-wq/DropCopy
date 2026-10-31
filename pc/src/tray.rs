@@ -7,6 +7,8 @@ use std::path::PathBuf;
 pub struct Info {
     pub name: String,
     pub save_dir: PathBuf,
+    /// The settings folder: which phones have connected.
+    pub home: PathBuf,
     /// The pairing link, for "Show pairing code".
     pub link: String,
     /// Checks for a newer release and installs it: `Ok(None)` up to date, `Ok(Some(v))` installed
@@ -160,8 +162,18 @@ mod imp {
             it(ID_UPDATE, Icon::Update, if busy { "Checking for updates…" } else { "Check for updates" }, format!("v{}", crate::update::current()), !busy, false),
             it(ID_QUIT, Icon::Power, "Quit", "starts again at sign-in".into(), true, true),
         ];
-        let name = INFO.get().map(|i| i.name.clone()).unwrap_or_else(|| "this PC".into());
-        crate::menu::show((x, y), "DropCopy".into(), format!("Receiving as {name}"), items, hwnd.0 as usize);
+        let home = INFO.get().map(|i| i.home.clone()).unwrap_or_default();
+        let phones = crate::config::phones(&home);
+        let (dot, word) = match crate::near::link() {
+            crate::near::Link::Connected => (crate::menu::Dot::Connected, "Connected"),
+            crate::near::Link::Unstable => (crate::menu::Dot::Unstable, "Unstable connection"),
+            crate::near::Link::Offline => (crate::menu::Dot::Offline, "Offline"),
+        };
+        let status = match phones.first() {
+            Some(p) => format!("{word} · {p}"),
+            None => word.to_string(),
+        };
+        crate::menu::show((x, y), "DropCopy".into(), status, items, hwnd.0 as usize, phones.len(), dot);
     }
 
     unsafe fn run(hwnd: HWND, cmd: usize) {

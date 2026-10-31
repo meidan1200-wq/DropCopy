@@ -319,6 +319,7 @@ fn serve(cfg: Config, a: &Args) -> Result<(), String> {
     dropcopy::tray::start(dropcopy::tray::Info {
         name: cfg.name.clone(),
         save_dir: cfg.save_dir.clone(),
+        home: cfg.home.clone(),
         link: pair::link(&cfg, server.port),
         update: update_from_tray,
     });

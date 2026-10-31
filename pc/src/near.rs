@@ -130,7 +130,36 @@ static LAST: std::sync::Mutex<Option<(f32, Instant)>> = std::sync::Mutex::new(No
 /// Where the phone said it can be reached, and when.
 static PHONE: std::sync::Mutex<Option<(std::net::SocketAddr, Instant)>> = std::sync::Mutex::new(None);
 
+/// The last time the phone was heard from at all: a hello, a check-in or a transfer.
+static CONTACT: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+
+pub fn heard_from_phone() {
+    *CONTACT.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Link {
+    /// Heard within the last 40 s (the phone says hello every 15 s while its screen is on).
+    Connected,
+    /// Heard recently, but hellos have been missed: weak Wi-Fi, or the phone is going to sleep.
+    Unstable,
+    Offline,
+}
+
+pub fn link_after(since: Option<Duration>) -> Link {
+    match since {
+        Some(d) if d < Duration::from_secs(40) => Link::Connected,
+        Some(d) if d < Duration::from_secs(180) => Link::Unstable,
+        _ => Link::Offline,
+    }
+}
+
+pub fn link() -> Link {
+    link_after(CONTACT.lock().unwrap_or_else(|e| e.into_inner()).map(|t| t.elapsed()))
+}
+
 pub fn phone_is_at(addr: std::net::SocketAddr) {
+    heard_from_phone();
     *PHONE.lock().unwrap_or_else(|e| e.into_inner()) = Some((addr, Instant::now()));
 }
 
@@ -236,6 +265,14 @@ pub fn simulate(state: u8, smoothed: Option<f32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn link_status_follows_how_recently_the_phone_was_heard() {
+        assert_eq!(link_after(None), Link::Offline);
+        assert_eq!(link_after(Some(Duration::from_secs(10))), Link::Connected);
+        assert_eq!(link_after(Some(Duration::from_secs(90))), Link::Unstable);
+        assert_eq!(link_after(Some(Duration::from_secs(600))), Link::Offline);
+    }
 
     #[test]
     fn token_matches_only_its_key_and_nearby_minutes() {

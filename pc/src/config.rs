@@ -184,15 +184,25 @@ impl Config {
 const PAIRED: &str = "paired";
 const LAST_PHONE: &str = "last-phone.txt";
 
-/// The name of the phone that connected last ("Galaxy S20+"), for the setup window and the tray.
+/// Phones that connected, most recent first (at most 3), for the setup window and the tray.
 pub fn remember_phone(home: &Path, name: &str) {
-    if last_phone(home).as_deref() != Some(name) {
-        let _ = fs::write(home.join(LAST_PHONE), name);
+    let mut list = phones(home);
+    if list.first().map(String::as_str) == Some(name) {
+        return;
     }
+    list.retain(|p| p != name);
+    list.insert(0, name.to_string());
+    list.truncate(3);
+    let _ = fs::write(home.join(LAST_PHONE), list.join("\n"));
 }
 
+pub fn phones(home: &Path) -> Vec<String> {
+    fs::read_to_string(home.join(LAST_PHONE)).unwrap_or_default().lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
+}
+
+/// The phone that connected last ("Galaxy S20+").
 pub fn last_phone(home: &Path) -> Option<String> {
-    fs::read_to_string(home.join(LAST_PHONE)).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    phones(home).into_iter().next()
 }
 
 #[cfg(unix)]

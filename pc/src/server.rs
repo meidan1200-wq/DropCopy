@@ -99,6 +99,7 @@ impl Server {
                     Ok(r) => {
                         // Only a phone holding the key gets this far: it is paired.
                         cfg.mark_paired();
+                        crate::near::heard_from_phone();
                         if let Some(d) = &r.device {
                             crate::config::remember_phone(&cfg.home, d);
                         }

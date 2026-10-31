@@ -86,7 +86,23 @@ pub struct Layout {
     pub lines: Vec<f32>,
 }
 
+/// What the header shows: the paired phones (drawn small), and the colour of the status dot.
+pub struct Header<'a> {
+    pub phones: &'a [RgbaImage],
+    pub dot: [u8; 3],
+}
+
+/// Height of a phone in the header, logical px (body; its image adds a shadow margin).
+pub const HEADER_PHONE: f32 = 40.0;
+/// Phones side by side in the header, from the left: centre-to-centre spacing.
+const PHONE_STEP: f32 = 26.0;
+
 pub fn layout(items: &[Item], scale: f32) -> Layout {
+    layout_with(items, scale, 0)
+}
+
+/// `phones` > 0: the header shows that many phones instead of the app icon.
+pub fn layout_with(items: &[Item], scale: f32, phones: usize) -> Layout {
     let s = scale.max(1.0);
     let m = SHADOW * s;
     let (px, pw) = (m, WIDTH * s);
@@ -116,7 +132,7 @@ pub fn layout(items: &[Item], scale: f32) -> Layout {
         header_icon,
         title_y,
         status_y,
-        text_x: px + 60.0 * s,
+        text_x: if phones == 0 { px + 60.0 * s } else { px + (16.0 + 8.0 + PHONE_STEP * phones as f32) * s },
         rows,
         lines,
     }
@@ -216,6 +232,10 @@ fn mix(a: [u8; 3], b: [u8; 3], t: f32) -> [f32; 3] {
 /// Everything except the text: shadow, panel, border, hover, lines, icons, the status dot.
 /// Pixels that GDI will write text over are fully opaque. `hover` is a row index.
 pub fn draw(l: &Layout, items: &[Item], hover: Option<usize>, t: &Theme) -> RgbaImage {
+    draw_with(l, items, hover, t, &Header { phones: &[], dot: t.ok })
+}
+
+pub fn draw_with(l: &Layout, items: &[Item], hover: Option<usize>, t: &Theme, head: &Header) -> RgbaImage {
     let s = l.scale;
     let (px, py, pw, ph) = l.panel;
     let r = RADIUS * s;
@@ -266,7 +286,8 @@ pub fn draw(l: &Layout, items: &[Item], hover: Option<usize>, t: &Theme) -> Rgba
         let dd = ((fx - dot.0).powi(2) + (fy - dot.1).powi(2)).sqrt() - dot.2;
         let k = cover(dd);
         if k > 0.0 {
-            c = [c[0] + (t.ok[0] as f32 - c[0]) * k, c[1] + (t.ok[1] as f32 - c[1]) * k, c[2] + (t.ok[2] as f32 - c[2]) * k];
+            let o = head.dot;
+            c = [c[0] + (o[0] as f32 - c[0]) * k, c[1] + (o[1] as f32 - c[1]) * k, c[2] + (o[2] as f32 - c[2]) * k];
         }
         // A 1px border, drawn inside the edge.
         let edge = cover(d.abs() - 0.5) * (d > -1.5 * s.max(1.0)) as u8 as f32;
@@ -276,17 +297,42 @@ pub fn draw(l: &Layout, items: &[Item], hover: Option<usize>, t: &Theme) -> Rgba
         let k = a / oa.max(1e-6);
         *out = Rgba([(c[0] * k) as u8, (c[1] * k) as u8, (c[2] * k) as u8, (oa * 255.0).round() as u8]);
     }
+    // The phones, left to right, centred on the header's height (their shadow blends onto the panel).
+    let header_mid = l.header_icon.1 + l.header_icon.2 / 2.0;
+    for (i, ph) in head.phones.iter().enumerate() {
+        let cx = l.panel.0 + (16.0 + PHONE_STEP * (i as f32 + 0.5)) * s;
+        let x = (cx - ph.width() as f32 / 2.0).round() as i64;
+        let y = (header_mid - ph.height() as f32 / 2.0).round() as i64;
+        image::imageops::overlay(&mut img, ph, x, y);
+    }
     img
 }
 
-/// Windows: the menu window itself.
-pub fn show(anchor: (i32, i32), title: String, status: String, items: Vec<Item>, owner: usize) {
-    imp::show(anchor, title, status, items, owner);
+/// How the phone is doing, for the status dot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Dot {
+    Connected,
+    Unstable,
+    Offline,
+}
+
+pub fn dot_color(d: Dot, t: &Theme) -> [u8; 3] {
+    match d {
+        Dot::Connected => t.ok,
+        Dot::Unstable => [0xF2, 0xB2, 0x2E],
+        Dot::Offline => t.muted,
+    }
+}
+
+/// Windows: the menu window itself. `phones` is how many phones to draw in the header (0: the
+/// app icon instead).
+pub fn show(anchor: (i32, i32), title: String, status: String, items: Vec<Item>, owner: usize, phones: usize, dot: Dot) {
+    imp::show(anchor, title, status, items, owner, phones, dot);
 }
 
 #[cfg(not(windows))]
 mod imp {
-    pub fn show(_: (i32, i32), _: String, _: String, _: Vec<super::Item>, _: usize) {}
+    pub fn show(_: (i32, i32), _: String, _: String, _: Vec<super::Item>, _: usize, _: usize, _: super::Dot) {}
 }
 
 #[cfg(windows)]
@@ -319,6 +365,8 @@ mod imp {
         pos: (i32, i32),
         shown: Instant,
         tracking: bool,
+        phones: Vec<RgbaImage>,
+        dot: [u8; 3],
     }
 
     thread_local! {
@@ -367,7 +415,7 @@ mod imp {
     unsafe fn present(m: &Menu, alpha: f32, lift: f32) {
         let l = &m.layout;
         let s = l.scale;
-        let img = draw(l, &m.items, m.hover, &m.theme);
+        let img = draw_with(l, &m.items, m.hover, &m.theme, &Header { phones: &m.phones, dot: m.dot });
         let (w, h) = (l.w as i32, l.h as i32);
         let bmi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER { biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32, biWidth: w, biHeight: -h, biPlanes: 1, biBitCount: 32, biCompression: BI_RGB.0, ..Default::default() },
@@ -384,7 +432,9 @@ mod imp {
         // Header: the app icon, the name, the status.
         let (ix, iy, iz) = l.header_icon;
         let instance = GetModuleHandleW(None).unwrap_or_default();
-        if let Ok(hi) = LoadImageW(instance, PCWSTR(1 as _), IMAGE_ICON, iz as i32, iz as i32, LR_DEFAULTCOLOR) {
+        if !m.phones.is_empty() {
+            // The phones are already drawn into the image.
+        } else if let Ok(hi) = LoadImageW(instance, PCWSTR(1 as _), IMAGE_ICON, iz as i32, iz as i32, LR_DEFAULTCOLOR) {
             let _ = DrawIconEx(dc, ix as i32, iy as i32, HICON(hi.0), iz as i32, iz as i32, 0, None, DI_NORMAL);
             let _ = DestroyIcon(HICON(hi.0));
         }
@@ -530,7 +580,7 @@ mod imp {
         }
     }
 
-    pub fn show(anchor: (i32, i32), title: String, status: String, items: Vec<Item>, owner: usize) {
+    pub fn show(anchor: (i32, i32), title: String, status: String, items: Vec<Item>, owner: usize, phones: usize, dot: Dot) {
         unsafe {
             if let Some(old) = MENU.with(|m| m.borrow().as_ref().map(|m| m.hwnd)) {
                 close(old);
@@ -558,7 +608,9 @@ mod imp {
             let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
             let _ = GetMonitorInfoW(mon, &mut mi);
             let work = (mi.rcWork.left, mi.rcWork.top, mi.rcWork.right, mi.rcWork.bottom);
-            let layout = layout(&items, dx.max(96) as f32 / 96.0);
+            let scale = dx.max(96) as f32 / 96.0;
+            let layout = layout_with(&items, scale, phones);
+            let phone_img = (phones > 0).then(|| crate::setup_window::logo_phone(HEADER_PHONE * scale));
             let pos = place(&layout, anchor, work);
             let Ok(hwnd) = CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
@@ -577,7 +629,9 @@ mod imp {
                 return;
             };
             let theme = if dark_mode() { DARK } else { LIGHT };
-            let m = Menu { hwnd, owner: HWND(owner as _), title, status, items, layout, theme, hover: None, pos, shown: Instant::now(), tracking: false };
+            let phones = phone_img.map(|p| vec![p; phones]).unwrap_or_default();
+            let dot = dot_color(dot, &theme);
+            let m = Menu { hwnd, owner: HWND(owner as _), title, status, items, layout, theme, hover: None, pos, shown: Instant::now(), tracking: false, phones, dot };
             present(&m, 0.0, 1.0);
             MENU.with(|s| *s.borrow_mut() = Some(m));
             let _ = ShowWindow(hwnd, SW_SHOW);
@@ -655,5 +709,22 @@ mod tests {
         // Under the panel's bottom edge the shadow is partly transparent.
         let below = img.get_pixel((px + pw / 2.0) as u32, (l.panel.1 + l.panel.3 + 6.0) as u32);
         assert!(below[3] > 0 && below[3] < 200, "{below:?}");
+    }
+}
+
+#[cfg(test)]
+mod phone_header_tests {
+    use super::*;
+
+    #[test]
+    fn header_with_phones_draws() {
+        let it = |id, icon, label: &str| Item { id, icon, label: label.into(), detail: String::new(), enabled: true, separator: false };
+        let items = vec![it(1, Icon::Folder, "Open"), it(3, Icon::Power, "Quit")];
+        for scale in [1.0f32, 1.5] {
+            let l = layout_with(&items, scale, 2);
+            let ph = crate::setup_window::logo_phone(HEADER_PHONE * scale);
+            let img = draw_with(&l, &items, None, &DARK, &Header { phones: &[ph.clone(), ph], dot: DARK.ok });
+            assert_eq!(img.width(), l.w);
+        }
     }
 }

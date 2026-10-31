@@ -56,12 +56,34 @@ fn over(c: [f32; 3], with: [f32; 3], k: f32) -> [f32; 3] {
     [c[0] + (with[0] - c[0]) * k, c[1] + (with[1] - c[1]) * k, c[2] + (with[2] - c[2]) * k]
 }
 
+/// A phone screen showing DropCopy: blue, with the logo large and faded across it. Put on a
+/// phone with `phone_art::render` (the tray header, the reconnect stage).
+pub fn logo_screen(w: u32, h: u32) -> RgbaImage {
+    let (fw, fh) = (w as f32, h as f32);
+    let size = fw * 1.25; // the logo's 108-unit canvas; its glyph fills most of the width
+    let (ox, oy) = (fw / 2.0 - size / 2.0, fh / 2.0 - size / 2.0);
+    RgbaImage::from_fn(w, h, |x, y| {
+        let g = y as f32 / fh;
+        let c = over([0x23 as f32, 0x7E as f32, 0xF0 as f32], [0x12 as f32, 0x5A as f32, 0xC8 as f32], g);
+        let (u, v) = ((x as f32 + 0.5 - ox) / size * 108.0, (y as f32 + 0.5 - oy) / size * 108.0);
+        let c = if inside(ARROW, u, v) || inside(TRAY, u, v) { over(c, [255.0; 3], 0.30) } else { c };
+        Rgba([c[0] as u8, c[1] as u8, c[2] as u8, 255])
+    })
+}
+
+/// The small phone with the logo screen, `height` pixels tall (body only).
+pub fn logo_phone(height: f32) -> RgbaImage {
+    let k = height / crate::phone_art::BODY_H;
+    let screen = logo_screen(540, 1200);
+    crate::phone_art::render(Some(&screen), k, 1, false).image
+}
+
 /// Where the text goes (for GDI), in output pixels: (y of the line, size in px).
 pub fn text_lines(stage: Stage, s: f32, phone: Option<&str>) -> Vec<(f32, f32, String)> {
     let hint = |t: &str| (H * s - 70.0 * s, 15.0 * s, t.to_string());
     match stage {
         Stage::Scan => vec![(46.0 * s, 30.0 * s, "Scan me".into()), hint("Open DropCopy on your phone and point it here")],
-        Stage::Waiting => vec![(H * s / 2.0 + 60.0 * s, 20.0 * s, "Looking for your phone".into()), hint("Open DropCopy on the phone, or share a photo to it")],
+        Stage::Waiting => vec![(H * s / 2.0 + 132.0 * s, 20.0 * s, "Looking for your phone".into()), hint("Open DropCopy on the phone, or share a photo to it")],
         Stage::Connected => vec![
             (H * s / 2.0 + 70.0 * s, 24.0 * s, connected_line(phone)),
             hint("DropCopy keeps running in the tray"),
@@ -106,7 +128,9 @@ pub fn draw(stage: Stage, time: f32, done: f32, code: Option<&RgbaImage>, s: f32
                     let ph = ((time * 1.6 - i as f32 * 0.22) * std::f32::consts::TAU).sin() * 0.5 + 0.5;
                     let r = (7.0 + 3.5 * ph) * s;
                     let cx = fw / 2.0 + (i as f32 - 1.0) * 34.0 * s;
-                    let d = ((fx - cx).powi(2) + (fy - fh / 2.0).powi(2)).sqrt() - r;
+                    // Under the phone when there is one (reconnecting), else in the middle.
+                    let dy = if code.is_some() { fh / 2.0 + 104.0 * s } else { fh / 2.0 };
+                    let d = ((fx - cx).powi(2) + (fy - dy).powi(2)).sqrt() - r;
                     c = over(c, white, cover(d) * (0.45 + 0.55 * ph));
                 }
             }
@@ -132,10 +156,12 @@ pub fn draw(stage: Stage, time: f32, done: f32, code: Option<&RgbaImage>, s: f32
         }
         *p = Rgba([c[0] as u8, c[1] as u8, c[2] as u8, (a * 255.0) as u8]);
     }
-    if let (Stage::Scan, Some(ph)) = (stage, code) {
-        // Centre the phone a little below the title.
+    if let (Stage::Scan | Stage::Waiting, Some(ph)) = (stage, code) {
+        // Scan: the phone with the code, a little below the title. Waiting (reconnecting): the
+        // phone with the logo screen, above the dots.
+        let lift = if stage == Stage::Scan { 14.0 } else { -40.0 };
         let ox = (w as i64 - ph.width() as i64) / 2;
-        let oy = ((h as i64 - ph.height() as i64) / 2 + (14.0 * s) as i64).max(0);
+        let oy = ((h as i64 - ph.height() as i64) / 2 + (lift * s) as i64).max(0);
         image::imageops::overlay(&mut img, ph, ox, oy);
     }
     img
@@ -230,11 +256,15 @@ mod imp {
         unsafe {
             let _ = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
             let s = GetDpiForSystem().max(96) as f32 / 96.0;
-            let code = (!paired).then(|| {
-                let qr = qrcode::QrCode::with_error_correction_level(link.as_bytes(), qrcode::EcLevel::L).ok()?;
-                let m: Vec<bool> = qr.to_colors().into_iter().map(|c| c == qrcode::Color::Dark).collect();
-                Some(crate::phone_art::render_code(&m, qr.width(), s, false).image)
-            }).flatten();
+            let code = if paired {
+                Some(logo_phone(190.0 * s)) // reconnecting: the phone showing DropCopy
+            } else {
+                (|| {
+                    let qr = qrcode::QrCode::with_error_correction_level(link.as_bytes(), qrcode::EcLevel::L).ok()?;
+                    let m: Vec<bool> = qr.to_colors().into_iter().map(|c| c == qrcode::Color::Dark).collect();
+                    Some(crate::phone_art::render_code(&m, qr.width(), s, false).image)
+                })()
+            };
             let instance = GetModuleHandleW(None).unwrap_or_default();
             let class = w!("DropCopySetup");
             let wc = WNDCLASSEXW {
@@ -321,6 +351,11 @@ mod tests {
             let mid = img.get_pixel(10, img.height() / 2);
             assert!(mid[2] > 180 && mid[0] < 80, "blue: {mid:?}");
         }
+        // Reconnecting: the logo phone is drawn above the dots.
+        let ph = logo_phone(190.0);
+        let r = draw(Stage::Waiting, 0.0, 0.0, Some(&ph), 1.0);
+        let mid = r.get_pixel((W / 2.0) as u32, (H / 2.0 - 40.0) as u32);
+        assert!(mid[2] > 150 && mid[3] == 255, "phone screen is blue: {mid:?}");
         // Waiting: the dots are white in the middle; Connected: the check is drawn.
         let w = draw(Stage::Waiting, 0.0, 0.0, None, 1.0);
         let c = w.get_pixel((W / 2.0) as u32, (H / 2.0) as u32);

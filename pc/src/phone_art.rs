@@ -104,7 +104,7 @@ pub fn render_code(modules: &[bool], width: usize, scale: f32, hover: bool) -> A
 }
 
 pub fn draw(screen: Screen, scale: f32, count: usize, hover: bool) -> Art {
-    let s = scale.max(1.0);
+    let s = scale.max(0.2); // small phones in the tray menu header too
     let (bw, bh, m) = (BODY_W * s, BODY_H * s, MARGIN * s);
     let (w, h) = ((bw + 2.0 * m).ceil() as u32, (bh + 2.0 * m).ceil() as u32);
     let mut img = RgbaImage::new(w, h);
