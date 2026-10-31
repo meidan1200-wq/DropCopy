@@ -14,6 +14,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// One stress test at a time: each measures speed, memory or CPU for the whole process, which
+/// tests running alongside would distort.
+static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn turn() -> std::sync::MutexGuard<'static, ()> {
+    TURN.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn temp(name: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("dropcopy-stress-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
@@ -91,18 +99,20 @@ fn same_file(a: &Path, b: &Path) -> bool {
 
 #[test]
 fn a_big_video_streams_fast_in_bounded_memory() {
+    let _turn = turn();
     let r = rig("big");
-    let size = 512 << 20; // a 4K phone video
+    // A 4K phone video; smaller in an unoptimised build, where the cipher alone is slow.
+    let size = if cfg!(debug_assertions) { 64 << 20 } else { 512 << 20 };
     let src = r.dir.join("video.mp4");
     pseudo_random_file(&src, size, 7);
     let before = peak_mb();
     let sent = client::send(&r.phone, Some(&r.addr), &[Item::File(src.clone())]).unwrap();
     let mbps = size as f64 / sent.elapsed.as_secs_f64() / 1048576.0;
     let grew = peak_mb().saturating_sub(before);
-    println!("512 MB in {:?}: {mbps:.0} MB/s, peak memory grew {grew} MB", sent.elapsed);
+    println!("{} MB in {:?}: {mbps:.0} MB/s, peak memory grew {grew} MB", size >> 20, sent.elapsed);
     assert!(same_file(&src, &r.save_dir.join("video.mp4")), "arrives intact");
     // Streams in 512 KB records: memory must not grow with the file.
-    assert!(grew < 64, "memory grew {grew} MB for a 512 MB file");
+    assert!(grew < 64, "memory grew {grew} MB for a {} MB file", size >> 20);
     if !cfg!(debug_assertions) {
         // Loopback, encrypted both ways in one process: far above any Wi-Fi link.
         assert!(mbps > 150.0, "{mbps:.0} MB/s");
@@ -111,6 +121,7 @@ fn a_big_video_streams_fast_in_bounded_memory() {
 
 #[test]
 fn hundreds_of_photos_in_one_share() {
+    let _turn = turn();
     let r = rig("many");
     let src = r.dir.join("src");
     std::fs::create_dir_all(&src).unwrap();
@@ -132,6 +143,7 @@ fn hundreds_of_photos_in_one_share() {
 
 #[test]
 fn many_phones_at_once() {
+    let _turn = turn();
     let r = rig("concurrent");
     let phones = 24;
     let srcs: Vec<PathBuf> = (0..phones)
@@ -161,6 +173,7 @@ fn many_phones_at_once() {
 
 #[test]
 fn file_names_cannot_escape_the_save_folder() {
+    let _turn = turn();
     let r = rig("names");
     let names = ["../../escape.txt", "..\\..\\escape2.txt", "/etc/passwd", "C:\\Windows\\win.ini", "CON", "nul.txt", "a:b*c?.txt", &"long".repeat(200), "", ".", "..", "שלום עולם.jpg", "trailing. "];
     for n in names {
@@ -197,6 +210,7 @@ fn send_named(r: &Rig, name: &str, data: &[u8]) {
 
 #[test]
 fn hostile_connections_do_not_hurt_real_ones() {
+    let _turn = turn();
     let r = rig("hostile");
     let before = peak_mb();
     // Garbage, a half hello, a claimed 4 GB record, and many that connect and say nothing.
@@ -239,6 +253,7 @@ fn hostile_connections_do_not_hurt_real_ones() {
 
 #[test]
 fn a_silent_connection_is_dropped_soon() {
+    let _turn = turn();
     let r = rig("silent");
     let mut s = TcpStream::connect(r.sock).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(20))).unwrap();
@@ -252,6 +267,7 @@ fn a_silent_connection_is_dropped_soon() {
 
 #[test]
 fn a_transfer_cut_off_midway_leaves_nothing_behind() {
+    let _turn = turn();
     let r = rig("cutoff");
     let mut s = TcpStream::connect(r.sock).unwrap();
     let mut rd = s.try_clone().unwrap();
@@ -268,6 +284,7 @@ fn a_transfer_cut_off_midway_leaves_nothing_behind() {
 
 #[test]
 fn records_reject_tampering_and_replay() {
+    let _turn = turn();
     let key = [5u8; 32];
     let (mut a, mut b) = (Records::new(&key), Records::new(&key));
     let mut wire = Vec::new();
@@ -290,6 +307,7 @@ fn records_reject_tampering_and_replay() {
 
 #[test]
 fn discovery_survives_a_flood() {
+    let _turn = turn();
     if std::net::UdpSocket::bind(("0.0.0.0", proto::UDP_PORT)).is_err() {
         eprintln!("skipped: UDP port in use by a running receiver");
         return;
@@ -314,6 +332,7 @@ fn discovery_survives_a_flood() {
 
 #[test]
 fn a_connection_flood_is_capped_and_recovers() {
+    let _turn = turn();
     let r = rig("flood-tcp");
     // 400 sockets that never speak: past the cap (256) the receiver closes them at once.
     let mut held = vec![];
@@ -337,4 +356,34 @@ fn a_connection_flood_is_capped_and_recovers() {
     std::thread::sleep(Duration::from_secs(5));
     client::send(&r.phone, Some(&r.addr), &[Item::File(src.clone())]).unwrap();
     assert!(same_file(&src, &r.save_dir.join("after.jpg")));
+}
+
+/// CPU time this process has used, in ms (Linux; elsewhere None and the check is skipped).
+fn cpu_ms() -> Option<u64> {
+    let s = std::fs::read_to_string("/proc/self/stat").ok()?;
+    let f: Vec<&str> = s.rsplit(')').next()?.split_whitespace().collect();
+    let ticks: u64 = f.get(11)?.parse::<u64>().ok()? + f.get(12)?.parse::<u64>().ok()?;
+    Some(ticks * 10) // USER_HZ is 100 on Linux
+}
+
+#[test]
+fn an_idle_receiver_uses_no_cpu_and_check_ins_are_quick() {
+    let _turn = turn();
+    let r = rig("idle");
+    // 200 check-ins in a row (what "Check connection" and every send start with).
+    let t0 = Instant::now();
+    for _ in 0..200 {
+        client::send(&r.phone, Some(&r.addr), &[]).unwrap();
+    }
+    let per = t0.elapsed() / 200;
+    println!("check-in: {per:?} each");
+    assert!(per < Duration::from_millis(if cfg!(debug_assertions) { 40 } else { 10 }), "{per:?}");
+    // Then idle: blocked in accept, no timers spinning. (Other tests may run alongside, so this
+    // only catches a busy loop, which would burn a whole core.)
+    if let Some(before) = cpu_ms() {
+        std::thread::sleep(Duration::from_secs(3));
+        let used = cpu_ms().unwrap() - before;
+        println!("3 s idle: {used} ms CPU for the whole test process");
+        assert!(used < 2500, "{used} ms");
+    }
 }

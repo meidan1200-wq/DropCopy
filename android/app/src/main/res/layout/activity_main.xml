@@ -246,6 +246,53 @@
             </LinearLayout>
 
             <ImageView
+                android:id="@+id/row_ok_oem_div"
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/divider" />
+
+            <LinearLayout
+                android:id="@+id/row_ok_oem"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:minHeight="72dp"
+                android:orientation="horizontal"
+                android:paddingTop="10dp"
+                android:paddingBottom="10dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/Title"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:id="@+id/oem_title"
+                        android:text="Let it start on its own" />
+
+                    <TextView
+                        style="@style/Body"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:id="@+id/oem_detail"
+                        android:text="" />
+                </LinearLayout>
+
+                <Button
+                    android:id="@+id/oem_allow"
+                    style="@style/Btn.Tonal"
+                    android:layout_width="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:text="Open" />
+            </LinearLayout>
+
+            <ImageView
                 android:id="@+id/row_ok_notify_div"
                 android:layout_width="match_parent"
                 android:layout_height="1dp"
@@ -284,6 +331,51 @@
 
                 <Button
                     android:id="@+id/notify_allow"
+                    style="@style/Btn.Tonal"
+                    android:layout_width="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:text="Allow" />
+            </LinearLayout>
+
+            <ImageView
+                android:id="@+id/row_ok_photos_div"
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/divider" />
+
+            <LinearLayout
+                android:id="@+id/row_ok_photos"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:minHeight="72dp"
+                android:orientation="horizontal"
+                android:paddingTop="10dp"
+                android:paddingBottom="10dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/Title"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Allow all photos" />
+
+                    <TextView
+                        style="@style/Body"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="It can only see photos you picked, so new screenshots don't reach the PC." />
+                </LinearLayout>
+
+                <Button
+                    android:id="@+id/photos_allow"
                     style="@style/Btn.Tonal"
                     android:layout_width="wrap_content"
                     android:layout_marginStart="12dp"

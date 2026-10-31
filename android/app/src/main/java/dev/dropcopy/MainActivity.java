@@ -99,6 +99,21 @@ public class MainActivity extends Activity {
         findViewById(R.id.pair).setOnClickListener(v -> pair(link.getText().toString()));
         findViewById(R.id.battery_allow).setOnClickListener(v -> askBatteryExemption());
         findViewById(R.id.notify_allow).setOnClickListener(v -> askNotifications());
+        findViewById(R.id.oem_allow).setOnClickListener(v -> {
+            android.content.Intent screen = Oem.autostart(this);
+            if (screen != null) Oem.open(this, screen);
+            Store.setFlag(this, OEM_SEEN, true); // there is no way to read that switch back
+            refresh();
+        });
+        findViewById(R.id.photos_allow).setOnClickListener(v -> {
+            // Asked before: Android shows its "allow all" choice only in the app's settings.
+            if (Store.flag(this, ASKED_PHOTOS) && !shouldShowRequestPermissionRationale(WatchService.mediaPermission())) {
+                startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName())));
+            } else {
+                Store.setFlag(this, ASKED_PHOTOS, true);
+                requestPermissions(new String[]{WatchService.mediaPermission()}, 5);
+            }
+        });
         findViewById(R.id.install_allow).setOnClickListener(v ->
                 startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()))));
         findViewById(R.id.update_install).setOnClickListener(v -> installUpdate());
@@ -408,13 +423,23 @@ public class MainActivity extends Activity {
         boolean notifications = Build.VERSION.SDK_INT < 33
                 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
         boolean auto = Store.autoUpdate(this);
+        // Partial access ("Select photos", Android 14+) or refused: new photos stay invisible.
+        boolean wantsPhotos = shots.isChecked() || camera.isChecked() || near.isChecked();
+        boolean photosOk = checkSelfPermission(WatchService.mediaPermission()) == PackageManager.PERMISSION_GRANTED;
+        boolean oem = background && !Store.flag(this, OEM_SEEN) && Oem.autostart(this) != null;
+        if (oem) {
+            ((TextView) findViewById(R.id.oem_detail)).setText(Oem.brandName()
+                    + " stops apps that aren't allowed to start on their own. Find DropCopy and turn it on.");
+        }
         boolean[] show = {
                 background && !exempt,
+                oem,
                 (background || auto) && !notifications,
+                wantsPhotos && !photosOk,
                 auto && !getPackageManager().canRequestPackageInstalls(),
         };
-        int[] rows = {R.id.row_ok_battery, R.id.row_ok_notify, R.id.row_ok_install};
-        int[] dividers = {R.id.row_ok_battery_div, R.id.row_ok_notify_div, R.id.row_ok_install_div};
+        int[] rows = {R.id.row_ok_battery, R.id.row_ok_oem, R.id.row_ok_notify, R.id.row_ok_photos, R.id.row_ok_install};
+        int[] dividers = {R.id.row_ok_battery_div, R.id.row_ok_oem_div, R.id.row_ok_notify_div, R.id.row_ok_photos_div, R.id.row_ok_install_div};
         boolean any = false;
         for (int i = 0; i < rows.length; i++) {
             boolean on = paired && show[i];
@@ -437,6 +462,8 @@ public class MainActivity extends Activity {
     }
 
     private static final String ASKED_NOTIFY = "asked_notify";
+    private static final String OEM_SEEN = "oem_autostart_seen";
+    private static final String ASKED_PHOTOS = "asked_photos";
 
     private void showStatus(boolean ok, String title, String detail) {
         setDot(ok ? R.color.ok : R.color.warn);

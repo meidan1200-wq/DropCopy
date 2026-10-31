@@ -60,6 +60,9 @@ Wi-Fi, authenticated) for the photo. Laptops work best (the antenna is in the li
 window in the app shows the live signal; `dropcopy set near_rssi -50` makes "close" closer (higher) or
 farther (lower). `dropcopy set popup off` turns the little phone off.
 
+**The tray icon.** DropCopy's icon (the same as the phone app's) sits in the notification area while it runs.
+Click it to open the received pictures; right-click to show the pairing code or quit.
+
 **Delete from PC after pasting** (phone app, asks twice). Pictures you send are deleted from
 Pictures\DropCopy 30 seconds after the first paste, or 5 seconds after you copy anything else on the PC, or
 at the next start if never pasted. Pasting the image again keeps working (it is on the clipboard); pasting it
@@ -145,13 +148,38 @@ publish without them. Local builds without the secrets use the debug key and can
 ## Tests
 
 ```bash
-cd pc && cargo test --release                      # protocol, files, discovery, proximity, updates (21 tests)
-cd android && ./gradlew testReleaseUnitTest        # Android on Robolectric (13 tests)
-DROPCOPY_SHOTS=/tmp/shots ./gradlew testReleaseUnitTest --tests '*Screenshot*'   # renders the main screen
+cd pc && cargo test --release          # 38 tests: protocol, files, discovery, proximity, cleanup, updates, and…
+cargo test --release --test stress -- --nocapture   # …the limits (numbers below)
+cd android && ./gradlew testDebugUnitTest            # 80 tests on Robolectric, incl. every Android version 10–15
+DROPCOPY_SHOTS=/tmp/shots ./gradlew testDebugUnitTest --tests '*Screenshot*'   # renders the screens
 cargo run --release --example phone_preview photo.jpg /tmp   # renders the taskbar phone
-# Android tests against a live receiver, and the phone's protocol code on a desktop JVM:
-DROPCOPY_TEST_LINK="$(dropcopy pair | grep -o 'dropcopy://[^ ]*')" DROPCOPY_TEST_DIR="$(dropcopy dir)" ./gradlew testReleaseUnitTest
-javac -d /tmp/jt app/src/main/java/dev/dropcopy/Proto.java jvmtest/ProtoTest.java && java -cp /tmp/jt ProtoTest "<link>" photo.jpg
+cargo run --example make_icon assets                          # redraws the app icon
+# Android tests against a live receiver:
+DROPCOPY_TEST_LINK="$(dropcopy pair | grep -o 'dropcopy://[^ ]*')" DROPCOPY_TEST_DIR="$(dropcopy dir)" DROPCOPY_TEST_HOME="%APPDATA%/DropCopy" ./gradlew testDebugUnitTest
 ```
+
+**Limits the receiver is held to** (`pc/tests/stress.rs`, measured on a 4-core cloud VM over loopback; a real
+phone is limited by its Wi-Fi, typically 20–80 MB/s):
+
+| | |
+|---|---|
+| One 512 MB video | 179 MB/s, memory +2 MB (streams in 512 KB records) |
+| One share of 500 photos | 84 ms, all intact |
+| 24 phones sending 3 MB at once | 0.25 s |
+| A check-in (what every send starts with) | 0.2 ms |
+| Idle | 0 ms CPU in 3 s |
+| 200 hostile connections open (garbage, half hellos, a claimed 4 GB record) | a real phone still gets through in ms, memory flat |
+| 400 silent sockets | past 256 closed at once, the rest after 4 s; then phones get in again |
+| 20 000 junk discovery packets | still answers |
+| Names like `../../x`, `C:\Windows\win.ini`, `CON`, 800 characters | all saved inside the folder, made safe |
+| A transfer cut off midway | nothing half-written left behind |
+| A tampered or replayed record | refused |
+
+**On the phone** (`CompatTest`, `BatteryTest`): the main flows run on Android 10, 11, 12, 13, 14 and 15, each
+asking only for the permissions that version has. Nothing runs in the background until a feature is turned on;
+Bluetooth and the PC link run only while the screen is on, and the link sleeps between its 15-second hellos
+instead of polling; no wake locks; the update check waits for Wi-Fi, retries wait for any network. On Xiaomi,
+Huawei, Honor, Oppo, Realme, OnePlus, Vivo and Asus, whose own battery managers stop background apps, the
+*Needs your OK* card opens that maker's auto-start screen.
 
 Wire format: [PROTOCOL.md](PROTOCOL.md).

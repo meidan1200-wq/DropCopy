@@ -45,6 +45,10 @@ class NearLink {
         new Thread(() -> run(s), "near-link").start();
     }
 
+    boolean running() {
+        return sock != null;
+    }
+
     synchronized void stop() {
         DatagramSocket s = sock;
         sock = null;
@@ -75,6 +79,8 @@ class NearLink {
             }
             DatagramPacket p = new DatagramPacket(buf, buf.length);
             try {
+                // Sleep in the socket until a pull arrives or the next hello is due: no polling.
+                s.setSoTimeout((int) Math.max(50, nextHello - System.currentTimeMillis()));
                 s.receive(p);
             } catch (SocketTimeoutException e) {
                 continue;

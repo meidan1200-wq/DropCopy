@@ -144,6 +144,11 @@ public class WatchService extends Service {
 
     private AdvertisingSet adSet;
     private boolean advertising;
+
+    /** For tests: whether the Bluetooth advertisement and the PC link are running now. */
+    boolean advertisingNow() {
+        return advertising && link != null && link.running();
+    }
     /** Lets the PC ask for the newest photo when the phone comes close; runs while advertising. */
     private NearLink link;
     private BroadcastReceiver nearEvents;
