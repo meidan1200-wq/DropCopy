@@ -32,6 +32,7 @@ pub mod cleanup;
 pub mod client;
 pub mod clipboard;
 pub mod config;
+pub mod menu;
 pub mod near;
 pub mod phone_art;
 pub mod popup;

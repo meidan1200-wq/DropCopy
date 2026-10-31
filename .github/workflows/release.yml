@@ -74,14 +74,17 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
+      # The same program under a name that says what it is; dropcopy.exe stays for the updaters.
+      - run: cp dropcopy.exe DropCopy-Setup.exe
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.version || github.ref_name }}
           target_commitish: ${{ github.sha }}
           files: |
-            dropcopy.exe
+            DropCopy-Setup.exe
             DropCopy.apk
+            dropcopy.exe
           body: |
-            **PC (Windows):** download `dropcopy.exe`, run it once, then `dropcopy setup` to keep it running in the background. It updates itself from here on.
+            **PC (Windows 10/11):** download `DropCopy-Setup.exe` and double-click it. It installs itself, starts with Windows, runs in the background with an icon in the tray, and updates itself from here on. (`dropcopy.exe` is the same file, used by the built-in updater.)
             **Phone (Android 10+):** install `DropCopy.apk`, open it and scan the QR code the PC shows. It updates itself from here on.
-            Share a photo to DropCopy and press Ctrl+V on the PC, or drag the little phone above the taskbar into any app.
+            Share a photo to DropCopy and press Ctrl+V on the PC. Hold the phone by your laptop to bring up your newest photo on the little phone above the taskbar, and drag it into any app.

@@ -15,7 +15,7 @@ phone: Share → DropCopy        PC: file saved to Pictures\DropCopy
 
 **PC (Windows)**
 
-1. Double-click `dropcopy.exe`. It sets itself up to run in the background and to start with Windows
+1. Download `DropCopy-Setup.exe` from the latest release and double-click it. It sets itself up to run in the background and to start with Windows
    (installed to `%LOCALAPPDATA%\DropCopy`), then shows the pairing QR code and live activity. **Closing the
    window does not stop it.** With no network it waits quietly and picks up when the Wi-Fi is back.
    Running a newer download the same way upgrades it; an older one never replaces a newer install.
@@ -61,7 +61,8 @@ window in the app shows the live signal; `dropcopy set near_rssi -50` makes "clo
 farther (lower). `dropcopy set popup off` turns the little phone off.
 
 **The tray icon.** DropCopy's icon (the same as the phone app's) sits in the notification area while it runs.
-Click it to open the received pictures; right-click to show the pairing code, **check for updates** (it
+Click it to open the received pictures; right-click for DropCopy's own menu (rounded, light or dark to match
+Windows, keyboard too): show the pairing code, **check for updates** (it
 installs the new version and restarts, with a Windows notification saying what happened), or quit. That menu
 is the only window-style part of the PC side; everything else is the terminal.
 

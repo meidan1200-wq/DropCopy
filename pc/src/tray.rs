@@ -149,24 +149,23 @@ mod imp {
         }
     }
 
+    /// DropCopy's own menu (see `menu.rs`), opened at the icon; the choice comes back as WM_COMMAND.
     unsafe fn menu(hwnd: HWND, x: i32, y: i32) {
-        let Ok(m) = CreatePopupMenu() else { return };
-        let title = wide(&super::tooltip(INFO.get().map(|i| i.name.as_str()).unwrap_or("this PC")));
-        let _ = AppendMenuW(m, MF_STRING | MF_GRAYED, 0, PCWSTR(title.as_ptr()));
-        let _ = AppendMenuW(m, MF_SEPARATOR, 0, None);
-        let _ = AppendMenuW(m, MF_STRING, ID_OPEN, w!("Open received pictures"));
-        let _ = AppendMenuW(m, MF_STRING, ID_PAIR, w!("Show pairing code"));
-        let label = wide(&format!("Check for updates (v{})", crate::update::current()));
+        use crate::menu::{Icon, Item};
         let busy = UPDATING.load(std::sync::atomic::Ordering::SeqCst);
-        let _ = AppendMenuW(m, if busy { MF_STRING | MF_GRAYED } else { MF_STRING }, ID_UPDATE, PCWSTR(label.as_ptr()));
-        let _ = AppendMenuW(m, MF_SEPARATOR, 0, None);
-        let _ = AppendMenuW(m, MF_STRING, ID_QUIT, w!("Quit (starts again when you sign in)"));
-        // Without this the menu does not close when clicking elsewhere.
-        let _ = SetForegroundWindow(hwnd);
-        let cmd = TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY | TPM_BOTTOMALIGN, x, y, 0, hwnd, None);
-        let _ = PostMessageW(hwnd, WM_NULL, WPARAM(0), LPARAM(0));
-        let _ = DestroyMenu(m);
-        match cmd.0 as usize {
+        let it = |id, icon, label: &str, detail: String, enabled, separator| Item { id, icon, label: label.into(), detail, enabled, separator };
+        let items = vec![
+            it(ID_OPEN, Icon::Folder, "Open received pictures", String::new(), true, false),
+            it(ID_PAIR, Icon::Qr, "Show pairing code", String::new(), true, false),
+            it(ID_UPDATE, Icon::Update, if busy { "Checking for updates…" } else { "Check for updates" }, format!("v{}", crate::update::current()), !busy, false),
+            it(ID_QUIT, Icon::Power, "Quit", "starts again at sign-in".into(), true, true),
+        ];
+        let name = INFO.get().map(|i| i.name.clone()).unwrap_or_else(|| "this PC".into());
+        crate::menu::show((x, y), "DropCopy".into(), format!("Receiving as {name}"), items, hwnd.0 as usize);
+    }
+
+    unsafe fn run(hwnd: HWND, cmd: usize) {
+        match cmd {
             ID_OPEN => open_pictures(),
             ID_PAIR => {
                 if let Some(i) = INFO.get() {
@@ -200,6 +199,10 @@ mod imp {
                 }
                 LRESULT(0)
             }
+            WM_COMMAND => {
+                run(hwnd, wp.0 & 0xffff);
+                LRESULT(0)
+            }
             WM_ENDSESSION | WM_DESTROY => {
                 remove(hwnd);
                 LRESULT(0)
@@ -213,6 +216,7 @@ mod imp {
             return;
         }
         let _ = std::thread::Builder::new().name("tray".into()).spawn(|| unsafe {
+            let _ = windows::Win32::UI::HiDpi::SetThreadDpiAwarenessContext(windows::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
             let instance = GetModuleHandleW(None).unwrap_or_default();
             let _ = TASKBAR_CREATED.set(RegisterWindowMessageW(w!("TaskbarCreated")));
             let class = w!("DropCopyTray");
