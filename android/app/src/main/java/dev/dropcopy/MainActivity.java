@@ -478,7 +478,7 @@ public class MainActivity extends Activity {
         List<Proto.Pc> pcs = Store.pcs(this);
         boolean paired = !pcs.isEmpty();
         check.setVisibility(paired ? View.VISIBLE : View.GONE);
-        check.setText("Pair new");
+        check.setText("Scan new PC"); // opens the scanner: another PC, or this one again
         scan.setText(paired ? "Check connection" : "Scan pairing code");
         findViewById(R.id.paste_toggle).setVisibility(paired ? View.GONE : View.VISIBLE);
         findViewById(R.id.pc_setup).setVisibility(paired ? View.GONE : View.VISIBLE);

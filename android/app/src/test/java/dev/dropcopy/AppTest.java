@@ -295,6 +295,25 @@ public class AppTest {
         return o.toByteArray();
     }
 
+    /** Already paired with one PC: the second button scans a new code (here, with no Play
+     *  services scanner, it falls back to pasting the link, which proves the scan was started). */
+    @Test
+    public void pairedPhoneCanScanAnotherPc() {
+        Store.add(app, LINK);
+        MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
+        android.widget.Button b = a.findViewById(R.id.check);
+        assertEquals("Scan new PC", b.getText().toString());
+        assertEquals(android.view.View.VISIBLE, b.getVisibility());
+        b.performClick();
+        assertEquals("the scanner was asked for", android.view.View.VISIBLE, a.findViewById(R.id.paste_row).getVisibility());
+        // A second PC's link adds it alongside the first, and makes it the one used.
+        String second = "dropcopy://pair?v=1&id=8899aabbccddeeff&k=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&n=Laptop&p=48650";
+        ((android.widget.EditText) a.findViewById(R.id.link)).setText(second);
+        a.findViewById(R.id.pair).performClick();
+        assertEquals(2, Store.pcs(app).size());
+        assertEquals("Laptop", Store.pcs(app).get(0).name);
+    }
+
     @Test
     public void unpairedPhoneShowsNoSettingsYet() {
         MainActivity a = Robolectric.buildActivity(MainActivity.class).setup().get();
