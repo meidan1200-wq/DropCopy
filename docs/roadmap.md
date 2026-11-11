@@ -44,3 +44,24 @@ where supported, with the typed address staying the main path.
   first, PC second → name appears in the tray on the next check-in.
 - **Release builds:** a test that needs a fixed port must skip, not fail, when the port is taken
   (`Server::discovering()`); stress tests must delete their files (a full disk failed a run).
+
+## v0.6 (built 2026-11-11, being tested): one share icon, PC to phone, PC to PC
+See README ("From the PC") and PROTOCOL.md ("v2"). Choices made, to confirm with the user:
+- *Receive from your PCs* is **on by default** (a sleeping UDP socket while the screen is on, no
+  Bluetooth; it does keep the low-priority DropCopy notification). Turn off in the app.
+- The single share icon is labelled with the PC's name (one PC) or "My PC" (several).
+
+## Next: phone to phone, with the warp animation (asked 2026-11-11)
+1. **Pairing phones.** Phone B shows a QR code in the app (its own id and key, like a PC); phone A scans
+   it. Same v1 handshake; phone B runs a small TCP receiver only while its screen is on (or a
+   foreground "Receiving" screen is open), found by the existing UDP discovery.
+2. **Share target.** The top-row icon list gains the paired phone (e.g. "Galaxy S26"), still one icon
+   per destination kind; "My PC" keeps picking among PCs.
+3. **Warp animation (picture shares between phones only).** Sender: ShareActivity stays visible
+   ~600 ms: the picture shrinks into a rounded card and is pulled into a ripple that bends toward the
+   top of the screen (RenderEffect blur + a scale/translate path on Android 12+; scale and fade on
+   10–11). Receiver: a full-screen-intent notification (Android allows it for a short, user-visible
+   event) opens a translucent activity where the picture lands out of the same ripple, then settles
+   into the notification. App colours (#237EF0), no neon or glow.
+4. **Nearby fallback, maybe.** Without shared Wi-Fi, Google's Nearby Connections (Play services) gives
+   Bluetooth/Wi-Fi Direct transport. Adds a dependency; only if same-network use isn't enough.

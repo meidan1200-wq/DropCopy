@@ -42,9 +42,17 @@ phone: Share → DropCopy        PC: file saved to Pictures\DropCopy
 
 | You do on the phone | What happens |
 |---|---|
-| Share → **DropCopy** (or the PC's icon in the share sheet's top row) | Sent immediately; the sheet just closes. A toast confirms. |
+| Share → **DropCopy** (or the one PC icon in the share sheet's top row) | Sent immediately; the sheet just closes. A toast confirms. With several PCs it goes to the one you're holding the phone next to, else the one someone is using, else the last one used. |
 | Copy something, tap the **Send clipboard** tile | The phone's clipboard (text or image) goes to the PC's clipboard. |
 | Turn on **Auto-send new screenshots** (or camera photos), then take a screenshot | Zero taps: it's on the PC's clipboard a moment later. |
+
+**From the PC: to the phone, or to another PC.** Right-click files in Explorer → *Send to* →
+**DropCopy**, or use *Send clipboard to …* in the tray menu, and pick the phone or PC. A phone collects it
+straight away while its screen is on (*Receive from your PCs*, on by default) or the next time the app
+opens; pictures go to Pictures/DropCopy, videos to Movies/DropCopy, other files to Download/DropCopy, text
+to the clipboard, with a notification to open it. Another PC gets it like a phone's share: saved and on
+its clipboard. PCs find each other through the phone: once a phone paired with both has talked to each,
+they appear in each other's menus (each holds a key for that pair only, never the other's own key).
 
 **Bring the phone close (the little phone).** Turn on *Show on PC when near* in the app. Hold the phone next
 to your laptop and it sends its newest photo; a small phone with that photo on its screen rises from the
@@ -122,7 +130,7 @@ Over Wi-Fi expect the link speed (typically 20–80 MB/s) plus a few ms of setup
 | The PC's IP changes (DHCP) | Authenticated UDP discovery runs in parallel with the direct connect; the new address is remembered. |
 | Windows clipboard formats differ per app | Picture as CF_DIB + original PNG/JFIF + CF_HDROP file list in one clipboard write. |
 
-What it does **not** do: AirDrop's peer-to-peer Wi-Fi (AWDL). Phone and PC need to be on the same network,
+What it does **not** do (yet): phone to phone, and AirDrop's peer-to-peer Wi-Fi (AWDL). Phone and PC need to be on the same network,
 or the PC connected to the phone's hotspot. Guest networks with "client isolation" block it.
 
 ## Security

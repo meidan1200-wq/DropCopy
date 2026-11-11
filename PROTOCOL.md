@@ -1,4 +1,4 @@
-# DropCopy protocol v1
+# DropCopy protocol v1 (and v2 additions)
 
 Implementations: `pc/src/proto.rs` (receiver and sender), `android/app/src/main/java/dev/dropcopy/Proto.java`
 (sender). All integers big-endian.
@@ -97,3 +97,70 @@ Plaintext = `type u8 | body`:
 Sequence: `(FILE DATA* FILE_END | TEXT)* END`, then the PC replies OK or ERR. An empty sequence (`END` alone)
 is a connection check. A file not closed by FILE_END is deleted; names are reduced to their last path
 component and stripped of characters Windows rejects.
+
+## v2: which PC, PC to phone, PC to PC
+
+All additions are ignored by v1 peers: a v1 PC never answers `DCD2`, and the phone only sends the
+new records to a PC that has shown it speaks v2 (an answer to `DCD2`, or the v2 flag in `OK`).
+
+**Peer key.** `peer_key(K, from) = HMAC(K, "dropcopy/v2/peer" | from[8])`. A device that holds the
+pairing key itself (a phone) uses `from` = 8 zero bytes and K. Another PC uses its own id as `from`
+and the peer key a phone gave it. `Kf` below is "K for a phone, the peer key for a PC".
+
+### Which PC? — UDP 48651
+
+```
+phone → PC/broadcast "DCD2" | id[8] | from[8] | nonce[16] | HMAC(Kf, "dropcopy/v2/ask" | id | from | nonce)[0..16]   (52 bytes)
+PC    → phone        "DCR2" | id[8] | n[12] | AES-256-GCM(HMAC(Kf, "dropcopy/v2/disc"), n,
+                              aad = "DCR2" | id | from | nonce, body[8]) | tag[16]                             (48 bytes)
+                     body = port u16 | idle s u16 (65535 unknown) | phone's BLE dBm i16 (−32768 none) | flags u16
+                     flags: 0x0001 something waits here for a phone · 0x0080 v2 · 0x0100 the phone is close (BLE)
+```
+
+The request is authenticated (a PC ignores strangers) and the answer encrypted, so nobody on the
+network learns whether you are at your PC. With several PCs paired and none chosen, the phone asks
+them all and waits up to 300 ms (less once all answered), then sends to the PC it is held next to,
+else the one used most recently (idle under 120 s, smallest first), else the last one it used; no
+answer at all falls back to the v1 race.
+
+### PC to phone
+
+The PC keeps what you send to a phone in its outbox (`outbox\` in the settings folder) and the phone
+collects it; a phone can't be connected to at any moment, so it always dials out.
+
+```
+PC → phone (its hello address) "DCO1" | id[8] | nonce[16] | HMAC(K, "dropcopy/v2/offer" | id | nonce)[0..16]   (44 bytes)
+```
+
+The phone listens on the socket it says hello from (every 15 s while its screen is on, with
+*Receive from your PCs* on). On an offer, or an `OK` with flag 0x01, or a `DCR2` with flag 0x0001,
+or when the app opens, it connects as usual and sends `DEVICE`, `FETCH`, `END`. The PC answers with
+the items (`FILE DATA* FILE_END | TEXT`)* under k_s2c, then `OK`. The phone confirms with an `OK`
+record of its own; only then does the PC delete them, so a broken connection loses nothing.
+
+### PC to PC
+
+A phone paired with several v2 PCs sends each one, in any transfer, a `PEERS` record: for every
+other PC, `len u16 | dropcopy://peer?v=2&id=<other>&k=<peer_key(K_other, this id)>&n=<name>&p=<port>&a=<ip>`.
+A PC never receives another PC's pairing key, so it can't pose as that PC to phones, and a new key
+on either PC (`dropcopy pair --new`) ends the link. To send, a PC connects with
+
+```
+C → S   "DCP2" | cn[16] | from[8]          then the v1 handshake, keyed by peer_key(K_S, from)
+```
+
+and sends `DEVICE` (its name), the items and `END`, exactly like a phone.
+
+| type | name | body |
+|---|---|---|
+| 0x08 | FETCH | — (phone → PC) after END, send me what waits for me |
+| 0x09 | PEERS | (len u16 \| peer link)* (phone → PC) |
+| 0x10 | OK | count u16 \| flags u8 (v2: 0x01 something waits for you, 0x80 v2) |
+
+### Local notification (same machine only)
+
+```
+local → 127.0.0.1   "DCT1" | title | 0x00 | text      (at most 512 bytes)
+```
+
+`dropcopy share` (Explorer's Send to) asks the background copy to show its result from the tray icon.
