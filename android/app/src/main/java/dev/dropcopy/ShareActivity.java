@@ -33,9 +33,11 @@ public class ShareActivity extends Activity {
             if (t != null) text = t.toString();
         }
 
-        // Tapped a PC's own icon in the share sheet's top row.
+        // The icon in the share sheet's top row picks the PC by itself (null). An icon for one PC
+        // ("pc-<id>") came from an older version; the system may still offer it for a while.
         String shortcut = in.getStringExtra(Intent.EXTRA_SHORTCUT_ID);
         String pc = shortcut != null && shortcut.startsWith("pc-") ? shortcut.substring(3) : null;
+        if (pc != null && Store.pcs(this).size() > 1) pc = null;
 
         if (Store.pcs(this).isEmpty()) {
             Transfer.toast(this, "Pair your PC first");

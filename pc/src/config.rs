@@ -206,10 +206,10 @@ pub fn last_phone(home: &Path) -> Option<String> {
 }
 
 #[cfg(unix)]
-fn restrict_permissions(p: &Path) {
+pub fn restrict_permissions(p: &Path) {
     use std::os::unix::fs::PermissionsExt;
     let _ = fs::set_permissions(p, fs::Permissions::from_mode(0o600));
 }
 
 #[cfg(not(unix))]
-fn restrict_permissions(_: &Path) {}
+pub fn restrict_permissions(_: &Path) {}

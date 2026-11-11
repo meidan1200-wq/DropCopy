@@ -66,10 +66,24 @@ final class Transfer {
         return send(c, items, pcHex, progress);
     }
 
+    /** How long the phone waits for "is someone using you?" answers before choosing a PC. */
+    static final int ASK_MS = 300;
+
     static String send(Context c, List<Proto.Item> items, String pcHex, Proto.Progress progress) throws IOException {
-        List<Proto.Pc> pcs = Store.pcs(c);
+        List<Proto.Pc> all = Store.pcs(c);
+        List<Proto.Pc> pcs = new ArrayList<>(all);
         if (pcHex != null) pcs.removeIf(p -> !p.hexId().equals(pcHex));
         if (pcs.isEmpty()) throw new IOException("Pair your PC first: open DropCopy");
+        // Several PCs and no choice made: ask which is in use, and send to that one only.
+        List<Proto.Pc> race = pcs;
+        if (pcHex == null && pcs.size() > 1) {
+            Proto.Status st = Proto.choose(pcs, Proto.ask(pcs, Proto.broadcastAddresses(), routes(c), ASK_MS));
+            if (st != null) {
+                st.pc.host = st.host;
+                st.pc.port = st.port;
+                race = java.util.Collections.singletonList(st.pc);
+            }
+        }
 
         boolean hasOptions = false, hasFile = false;
         for (Proto.Item it : items) {
@@ -81,30 +95,44 @@ final class Transfer {
             toSend.add(0, Proto.options(Proto.OPT_DELETE_AFTER_PASTE));
         }
         toSend.add(0, Proto.device(deviceName(c)));
+        // Each PC learns the others (with a key just for that pair), so they can send to each other.
+        if (all.size() > 1) toSend.add(1, Proto.introductions(all));
         // A PC older than these records refuses them and hangs up mid-send (the phone sees "broken
         // pipe", not the reason). So after such a failure, send plainly, and if that works, skip
         // the extras for that PC for a day: it will have updated itself by then.
         boolean legacy = System.currentTimeMillis() < c.getSharedPreferences("dropcopy", Context.MODE_PRIVATE).getLong(LEGACY_UNTIL, 0);
         Proto.Result r;
         if (legacy) {
-            r = Proto.send(pcs, Proto.broadcastAddresses(), routes(c), items, progress);
+            r = sendTo(c, race, pcs, items, progress);
         } else {
             try {
-                r = Proto.send(pcs, Proto.broadcastAddresses(), routes(c), toSend, progress);
+                r = sendTo(c, race, pcs, toSend, progress);
             } catch (Proto.Unreachable e) {
                 throw e; // not found at all: nothing to do with the records
             } catch (IOException e) {
-                r = Proto.send(pcs, Proto.broadcastAddresses(), routes(c), items, progress);
+                r = sendTo(c, race, pcs, items, progress);
                 c.getSharedPreferences("dropcopy", Context.MODE_PRIVATE).edit()
                         .putLong(LEGACY_UNTIL, System.currentTimeMillis() + 24L * 3600 * 1000).apply();
             }
         }
         Store.remember(c, r.pc);
+        // Something waits on that PC for this phone (sent from the PC): collect it now.
+        if ((r.flags & Proto.OK_WAITING) != 0) SendService.fetch(c, r.pc.hexId());
         items = new ArrayList<>(items);
-        items.removeIf(it -> it.options() >= 0 || it.device() != null);
+        items.removeIf(it -> it.options() >= 0 || it.device() != null || it.introFor(null) != null);
         if (items.isEmpty()) return "Connected to " + r.pc.name + " (" + r.totalMillis + " ms)";
         String what = items.size() == 1 ? (items.get(0).text() != null ? "Text" : items.get(0).name()) : items.size() + " items";
         return what + " → " + r.pc.name + " · " + human(r.bytes) + " · " + r.totalMillis + " ms";
+    }
+
+    /** The chosen PC first; if it can't be reached after all, whichever of them answers. */
+    private static Proto.Result sendTo(Context c, List<Proto.Pc> race, List<Proto.Pc> pcs, List<Proto.Item> items, Proto.Progress progress) throws IOException {
+        try {
+            return Proto.send(race, Proto.broadcastAddresses(), routes(c), items, progress);
+        } catch (Proto.Unreachable e) {
+            if (race == pcs) throw e;
+            return Proto.send(pcs, Proto.broadcastAddresses(), routes(c), items, progress);
+        }
     }
 
     /**

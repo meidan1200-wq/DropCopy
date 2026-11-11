@@ -8,6 +8,7 @@ import android.bluetooth.BluetoothManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.widget.ProgressBar;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
@@ -34,7 +35,7 @@ public class MainActivity extends Activity {
     private TextView pcName, pcDetail, statusMessage;
     private ImageView dot;
     private Button scan, check;
-    private Switch shots, camera, near, updates, deleteAfter;
+    private Switch shots, camera, near, updates, deleteAfter, receive;
     private View updateCard, needsCard;
     private Updater.Release pendingUpdate;
     private boolean checking, asking;
@@ -84,6 +85,7 @@ public class MainActivity extends Activity {
         near = findViewById(R.id.sw_near);
         updates = findViewById(R.id.sw_updates);
         deleteAfter = findViewById(R.id.sw_delete);
+        receive = findViewById(R.id.sw_receive);
         updateCard = findViewById(R.id.update_card);
         needsCard = findViewById(R.id.needs_card);
         ((TextView) findViewById(R.id.version)).setText("v" + BuildConfig.VERSION_NAME);
@@ -137,6 +139,13 @@ public class MainActivity extends Activity {
         findViewById(R.id.row_near).setOnClickListener(v -> {
             if (near.isChecked()) showNearSetup(); else near.toggle();
         });
+        receive.setChecked(Store.receive(this));
+        findViewById(R.id.row_receive).setOnClickListener(v -> receive.toggle());
+        receive.setOnCheckedChangeListener((b, on) -> {
+            Store.setFlag(this, Store.RECEIVE, on);
+            WatchService.sync(this);
+            refresh();
+        });
         bindDeleteAfterPaste();
         updates.setChecked(Store.autoUpdate(this));
         findViewById(R.id.row_updates).setOnClickListener(v -> updates.toggle());
@@ -156,7 +165,14 @@ public class MainActivity extends Activity {
         super.onResume();
         current = new java.lang.ref.WeakReference<>(this);
         refresh(); // e.g. back from the battery or permission settings
-        if (Store.pcs(this).isEmpty()) askPcToShowCode(false);
+        if (Store.pcs(this).isEmpty()) {
+            askPcToShowCode(false);
+        } else {
+            // Opening the app collects anything a PC sent to this phone meanwhile.
+            Context app = getApplicationContext();
+            new Thread(() -> { try { Receiver.collect(app); } catch (RuntimeException ignored) { } }, "collect").start();
+            WatchService.sync(this);
+        }
     }
 
     /**
@@ -506,7 +522,7 @@ public class MainActivity extends Activity {
      * until paired, so the first screen is only about pairing.
      */
     private void refreshNeeds(boolean paired) {
-        boolean background = shots.isChecked() || camera.isChecked() || near.isChecked();
+        boolean background = shots.isChecked() || camera.isChecked() || near.isChecked() || receive.isChecked();
         PowerManager pm = getSystemService(PowerManager.class);
         boolean exempt = pm == null || pm.isIgnoringBatteryOptimizations(getPackageName());
         boolean notifications = Build.VERSION.SDK_INT < 33

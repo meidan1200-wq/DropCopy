@@ -60,18 +60,23 @@ final class Store {
         save(c, Collections.emptyList());
     }
 
-    /** One share-sheet icon per PC ("Direct Share"), also shown on a long press of the app icon. */
+    /** The one share-sheet icon in the top row ("Direct Share"); also on a long press of the app icon. */
+    static final String AUTO_SHORTCUT = "auto";
+
+    /**
+     * One icon however many PCs are paired. Tapping it sends to the right one: the PC the phone
+     * is held next to, else the one someone is using, else the last one used ({@link Proto#choose}).
+     */
     static void publishShortcuts(Context c, List<Proto.Pc> pcs) {
         ShortcutManager sm = c.getSystemService(ShortcutManager.class);
         if (sm == null) return;
         List<ShortcutInfo> list = new ArrayList<>();
-        int max = Math.min(4, sm.getMaxShortcutCountPerActivity());
-        for (Proto.Pc pc : pcs) {
-            if (list.size() >= max) break;
-            Intent clip = new Intent(Intent.ACTION_VIEW).setClass(c, ClipActivity.class).putExtra("pc", pc.hexId());
-            ShortcutInfo.Builder b = new ShortcutInfo.Builder(c, "pc-" + pc.hexId())
-                    .setShortLabel(pc.name)
-                    .setLongLabel("Send clipboard to " + pc.name)
+        if (!pcs.isEmpty()) {
+            String label = pcs.size() == 1 ? pcs.get(0).name : "My PC";
+            Intent clip = new Intent(Intent.ACTION_VIEW).setClass(c, ClipActivity.class);
+            ShortcutInfo.Builder b = new ShortcutInfo.Builder(c, AUTO_SHORTCUT)
+                    .setShortLabel(label)
+                    .setLongLabel(pcs.size() == 1 ? "Send to " + label : "Send to my PC")
                     .setIcon(Icon.createWithResource(c, R.mipmap.ic_launcher))
                     .setCategories(Collections.singleton(CATEGORY))
                     .setIntent(clip);
@@ -79,10 +84,21 @@ final class Store {
             list.add(b.build());
         }
         try {
+            // Replaces the old one-icon-per-PC shortcuts, so the share sheet shows a single icon.
             sm.setDynamicShortcuts(list);
         } catch (IllegalStateException | IllegalArgumentException ignored) {
             // Rate-limited or rejected: the plain share target still works.
         }
+        if (Build.VERSION.SDK_INT >= 30) {
+            List<String> old = new ArrayList<>();
+            for (Proto.Pc pc : pcs) old.add("pc-" + pc.hexId());
+            try { sm.removeLongLivedShortcuts(old); } catch (RuntimeException ignored) { }
+        }
+    }
+
+    /** Receive from your PCs: on unless turned off. */
+    static boolean receive(Context c) {
+        return prefs(c).getBoolean(RECEIVE, true);
     }
 
     static boolean flag(Context c, String key) {
@@ -103,4 +119,5 @@ final class Store {
     static final String DELETE_AFTER_PASTE = "delete_after_paste";
     static final String WATCH_SCREENSHOTS = "watch_screenshots";
     static final String WATCH_CAMERA = "watch_camera";
+    static final String RECEIVE = "receive";
 }

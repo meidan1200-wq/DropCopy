@@ -14,6 +14,29 @@ pub struct Info {
     /// Checks for a newer release and installs it: `Ok(None)` up to date, `Ok(Some(v))` installed
     /// and the new copy started (this one should now quit).
     pub update: fn() -> Result<Option<String>, String>,
+    /// For sending the clipboard to a phone or another PC from the menu.
+    pub config: crate::config::Config,
+}
+
+/// A Windows notification from DropCopy's tray icon. False when the icon isn't up in this process.
+pub fn toast(title: &str, text: &str) -> bool {
+    imp::toast(title, text)
+}
+
+/// For a separate process (`dropcopy share`): hands the notification to the running background
+/// copy, which owns the tray icon; if none runs, shows it from a short-lived icon of its own.
+pub fn toast_from_anywhere(title: &str, text: &str) {
+    use std::net::{Ipv4Addr, UdpSocket};
+    let running = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, crate::proto::UDP_PORT)).is_err();
+    if running {
+        if let Ok(s) = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)) {
+            let msg = [crate::proto::TOAST_MAGIC.as_slice(), title.as_bytes(), &[0], text.as_bytes()].concat();
+            if s.send_to(&msg[..msg.len().min(crate::proto::TOAST_MAX)], (Ipv4Addr::LOCALHOST, crate::proto::UDP_PORT)).is_ok() {
+                return;
+            }
+        }
+    }
+    imp::toast_alone(title, text);
 }
 
 /// Adds the icon; it stays until the process ends.
@@ -30,6 +53,13 @@ pub fn tooltip(name: &str) -> String {
 #[cfg(not(windows))]
 mod imp {
     pub fn start(_: super::Info) {}
+    pub fn toast(title: &str, text: &str) -> bool {
+        crate::say!("  {title}: {text}");
+        true
+    }
+    pub fn toast_alone(title: &str, text: &str) {
+        toast(title, text);
+    }
 }
 
 #[cfg(windows)]
@@ -48,6 +78,10 @@ mod imp {
     const ID_PAIR: usize = 2;
     const ID_QUIT: usize = 3;
     const ID_UPDATE: usize = 4;
+    /// "Send clipboard to …": ID_SEND + the target's place in SEND_TO.
+    const ID_SEND: usize = 100;
+    const MAX_SEND_ROWS: usize = 3;
+    static SEND_TO: std::sync::Mutex<Vec<crate::sendto::Target>> = std::sync::Mutex::new(Vec::new());
     const NIIF_USER: u32 = 4;
     const NIIF_LARGE_ICON: u32 = 0x20;
     /// The tray window, so the update thread can show its result.
@@ -115,6 +149,54 @@ mod imp {
         let _ = Shell_NotifyIconW(NIM_MODIFY, &d);
     }
 
+    pub fn toast(title: &str, text: &str) -> bool {
+        if HWND_TRAY.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            return false;
+        }
+        unsafe { notify(title, text) };
+        true
+    }
+
+    /// From a process without the tray icon: a hidden window and a temporary icon that carries the
+    /// notification, removed again after it has shown.
+    unsafe extern "system" fn plain(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+        DefWindowProcW(hwnd, msg, wp, lp)
+    }
+
+    pub fn toast_alone(title: &str, text: &str) {
+        unsafe {
+            let instance = GetModuleHandleW(None).unwrap_or_default();
+            let class = w!("DropCopyToast");
+            let wc = WNDCLASSEXW { cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32, lpfnWndProc: Some(plain), hInstance: instance.into(), lpszClassName: class, ..Default::default() };
+            RegisterClassExW(&wc);
+            let Ok(hwnd) = CreateWindowExW(WINDOW_EX_STYLE(0), class, w!("DropCopy"), WS_OVERLAPPED, 0, 0, 0, 0, None, None, instance, None) else { return };
+            let mut d = data(hwnd);
+            d.uID = 2;
+            d.uFlags |= NIF_INFO;
+            copy_wide(&mut d.szInfoTitle, title);
+            copy_wide(&mut d.szInfo, text);
+            d.dwInfoFlags = NOTIFY_ICON_INFOTIP_FLAGS(NIIF_USER | NIIF_LARGE_ICON);
+            let _ = Shell_NotifyIconW(NIM_ADD, &d);
+            std::thread::sleep(std::time::Duration::from_secs(6));
+            let _ = Shell_NotifyIconW(NIM_DELETE, &d);
+            let _ = DestroyWindow(hwnd);
+        }
+    }
+
+    /// Sends the clipboard, off the UI thread (a phone may take a few seconds to collect).
+    fn send_clipboard(i: usize) {
+        let Some(target) = SEND_TO.lock().unwrap_or_else(|e| e.into_inner()).get(i).cloned() else { return };
+        let Some(cfg) = INFO.get().map(|i| i.config.clone()) else { return };
+        std::thread::spawn(move || {
+            let out = match crate::sendto::What::clipboard(&cfg) {
+                Ok(what) => crate::sendto::deliver(&cfg, &target, what),
+                Err(e) => crate::sendto::Outcome { title: format!("Nothing sent to {}", target.name()), text: e, ok: false },
+            };
+            crate::say!("  {}: {}", out.title, out.text);
+            unsafe { notify(&out.title, &out.text) };
+        });
+    }
+
     /// Off the UI thread: checking takes a moment and downloading longer.
     fn check_for_update() {
         use std::sync::atomic::Ordering::SeqCst;
@@ -156,12 +238,23 @@ mod imp {
         use crate::menu::{Icon, Item};
         let busy = UPDATING.load(std::sync::atomic::Ordering::SeqCst);
         let it = |id, icon, label: &str, detail: String, enabled, separator| Item { id, icon, label: label.into(), detail, enabled, separator };
-        let items = vec![
-            it(ID_OPEN, Icon::Folder, "Open received pictures", String::new(), true, false),
+        let targets: Vec<crate::sendto::Target> = INFO.get().map(|i| crate::sendto::targets(&i.config)).unwrap_or_default().into_iter().take(MAX_SEND_ROWS).collect();
+        let mut items: Vec<Item> = targets
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let icon = if matches!(t, crate::sendto::Target::Phone(_)) { Icon::Phone } else { Icon::Laptop };
+                it(ID_SEND + i, icon, &format!("Send clipboard to {}", t.name()), String::new(), true, false)
+            })
+            .collect();
+        let sep = !items.is_empty();
+        *SEND_TO.lock().unwrap_or_else(|e| e.into_inner()) = targets;
+        items.extend([
+            it(ID_OPEN, Icon::Folder, "Open received pictures", String::new(), true, sep),
             it(ID_PAIR, Icon::Qr, "Show pairing code", String::new(), true, false),
             it(ID_UPDATE, Icon::Update, if busy { "Checking for updates…" } else { "Check for updates" }, format!("v{}", crate::update::current()), !busy, false),
             it(ID_QUIT, Icon::Power, "Quit", "starts again at sign-in".into(), true, true),
-        ];
+        ]);
         let home = INFO.get().map(|i| i.home.clone()).unwrap_or_default();
         let phones = crate::config::phones(&home);
         let (dot, word) = match crate::near::link() {
@@ -186,6 +279,7 @@ mod imp {
                 }
             }
             ID_UPDATE => check_for_update(),
+            c if (ID_SEND..ID_SEND + MAX_SEND_ROWS).contains(&c) => send_clipboard(c - ID_SEND),
             ID_QUIT => {
                 remove(hwnd);
                 crate::say!("  quit from the tray icon");

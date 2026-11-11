@@ -60,9 +60,13 @@ public class WatchService extends Service {
                     || c.checkSelfPermission(Manifest.permission.BLUETOOTH_ADVERTISE) == PackageManager.PERMISSION_GRANTED);
     }
 
+    static boolean wantsReceive(Context c) {
+        return Store.receive(c);
+    }
+
     /** Starts or stops the background service to match the settings. */
     static void sync(Context c) {
-        boolean want = (wantsMedia(c) || wantsNear(c)) && !Store.pcs(c).isEmpty();
+        boolean want = (wantsMedia(c) || wantsNear(c) || wantsReceive(c)) && !Store.pcs(c).isEmpty();
         Intent i = new Intent(c, WatchService.class);
         if (want) {
             try { c.startForegroundService(i); } catch (RuntimeException ignored) { }
@@ -76,8 +80,12 @@ public class WatchService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         boolean media = wantsMedia(this), near = wantsNear(this);
-        String what = media && near ? "Sending new screenshots · visible to your PC when near"
-                : media ? "Sending new screenshots to your PC" : "Your PC will see the phone when it's near";
+        receive = wantsReceive(this);
+        java.util.List<String> parts = new java.util.ArrayList<>();
+        if (media) parts.add("Sending new screenshots");
+        if (near) parts.add("Seen by your PC when near");
+        if (receive) parts.add("Ready to receive from your PCs");
+        String what = parts.isEmpty() ? "DropCopy" : String.join(" · ", parts);
         // Battery saving would stop this once the app is closed: say so where it shows, and the
         // tap leads straight to the card with the Allow button.
         android.os.PowerManager pm = getSystemService(android.os.PowerManager.class);
@@ -90,6 +98,7 @@ public class WatchService extends Service {
                 .setContentIntent(open)
                 .build());
         if (near) startNearWatch(); else stopNearWatch();
+        updateLink();
         if (media && observer == null) {
             sinceSeconds = System.currentTimeMillis() / 1000 - 2;
             thread = new HandlerThread("watch");
@@ -145,6 +154,11 @@ public class WatchService extends Service {
     private AdvertisingSet adSet;
     private boolean advertising;
 
+    /** For tests: whether the PC link (hellos, pulls, offers) is running now. */
+    boolean linkNow() {
+        return link != null && link.running();
+    }
+
     /** For tests: whether the Bluetooth advertisement and the PC link are running now. */
     boolean advertisingNow() {
         return advertising && link != null && link.running();
@@ -187,17 +201,24 @@ public class WatchService extends Service {
                 .build();
     }
 
-    /** Advertises only while the screen is on: that is when the phone is in a hand. */
-    private void startNearWatch() {
-        if (nearEvents != null) { // already watching; maybe Bluetooth permission just arrived
-            updateAdvertising();
-            return;
-        }
+    /** Whether "Receive from your PCs" is on: the link then listens while the screen is on. */
+    private boolean receive;
+    private boolean nearOn;
+
+    /** Watches the screen (and Bluetooth) for proximity and receiving. */
+    private void watchScreen() {
+        if (nearEvents != null) return;
         main = new Handler(android.os.Looper.getMainLooper());
         nearEvents = new BroadcastReceiver() {
             @Override
             public void onReceive(Context c, Intent i) {
-                updateAdvertising();
+                if (nearOn) updateAdvertising();
+                updateLink();
+                // Screen on with something waiting on a PC: the knock comes within 15 s anyway,
+                // but a phone just picked up should not wait for it.
+                if (receive && Intent.ACTION_SCREEN_ON.equals(i.getAction())) {
+                    exec.execute(() -> { try { Receiver.collect(WatchService.this); } catch (RuntimeException ignored) { } });
+                }
             }
         };
         IntentFilter f = new IntentFilter();
@@ -205,14 +226,31 @@ public class WatchService extends Service {
         f.addAction(Intent.ACTION_SCREEN_OFF);
         f.addAction(BluetoothAdapter.ACTION_STATE_CHANGED);
         registerReceiver(nearEvents, f);
-        updateAdvertising();
+    }
+
+    /** Advertises only while the screen is on: that is when the phone is in a hand. */
+    private void startNearWatch() {
+        nearOn = true;
+        watchScreen();
+        updateAdvertising(); // maybe Bluetooth permission just arrived
     }
 
     private void stopNearWatch() {
-        if (nearEvents == null) return;
-        unregisterReceiver(nearEvents);
-        nearEvents = null;
+        nearOn = false;
         setAdvertising(false);
+    }
+
+    /** The PC link (hellos, pulls, offers) runs while the screen is on and a feature needs it. */
+    private void updateLink() {
+        if (receive) watchScreen();
+        PowerManager pm = getSystemService(PowerManager.class);
+        boolean on = pm != null && pm.isInteractive() && (receive || advertising);
+        if (on) {
+            if (link == null) link = new NearLink(this);
+            link.start();
+        } else if (link != null) {
+            link.stop();
+        }
     }
 
     private void updateAdvertising() {
@@ -235,15 +273,14 @@ public class WatchService extends Service {
                         .build();
                 adv.startAdvertisingSet(p, nearData(), null, null, null, adCallback);
                 advertising = true;
-                if (link == null) link = new NearLink(this);
-                link.start();
+                updateLink();
                 main.removeCallbacks(rotate);
                 main.postDelayed(rotate, msToNextMinute());
             } else if ((!on || adv == null) && advertising) {
                 if (adv != null) adv.stopAdvertisingSet(adCallback);
                 advertising = false;
                 adSet = null;
-                if (link != null) link.stop();
+                updateLink();
                 main.removeCallbacks(rotate);
             }
         } catch (SecurityException | IllegalStateException e) {
@@ -254,6 +291,12 @@ public class WatchService extends Service {
     @Override
     public void onDestroy() {
         stopNearWatch();
+        receive = false;
+        if (link != null) link.stop();
+        if (nearEvents != null) {
+            unregisterReceiver(nearEvents);
+            nearEvents = null;
+        }
         if (observer != null) getContentResolver().unregisterContentObserver(observer);
         if (thread != null) thread.quitSafely();
         exec.shutdown();

@@ -100,6 +100,68 @@ pub fn set_files(files: &[PathBuf], mode: ClipMode, delete_after_paste: bool) ->
     imp::set_files(files, mode, delete_after_paste)
 }
 
+/// What is on this PC's clipboard, for sending it to another device.
+#[derive(Debug, PartialEq)]
+pub enum Clip {
+    Files(Vec<PathBuf>),
+    Text(String),
+    /// A picture (a screenshot, "Copy image"), as PNG.
+    Image(Vec<u8>),
+    Empty,
+}
+
+/// Reads the clipboard: copied files first, then a picture, then text.
+pub fn get() -> Result<Clip, String> {
+    imp::get()
+}
+
+/// A Windows device-independent bitmap (CF_DIB) as PNG.
+pub fn dib_to_png(dib: &[u8]) -> Option<Vec<u8>> {
+    if dib.len() < 40 {
+        return None;
+    }
+    let u32_at = |i: usize| u32::from_le_bytes(dib[i..i + 4].try_into().unwrap());
+    let header = u32_at(0) as usize;
+    let bits = u16::from_le_bytes([dib[14], dib[15]]) as u32;
+    let compression = u32_at(16);
+    let used = u32_at(32);
+    let palette = if used > 0 { used } else if bits <= 8 { 1 << bits } else { 0 } as usize * 4;
+    let masks = if header == 40 && (compression == 3 || compression == 6) { if compression == 6 { 16 } else { 12 } } else { 0 };
+    let off = 14 + header + masks + palette;
+    let mut bmp = Vec::with_capacity(14 + dib.len());
+    bmp.extend_from_slice(b"BM");
+    bmp.extend_from_slice(&((14 + dib.len()) as u32).to_le_bytes());
+    bmp.extend_from_slice(&[0; 4]);
+    bmp.extend_from_slice(&(off as u32).to_le_bytes());
+    bmp.extend_from_slice(dib);
+    let img = image::load_from_memory_with_format(&bmp, image::ImageFormat::Bmp).ok()?;
+    // 32-bit DIBs often carry no real alpha (all zero): show them opaque.
+    let mut rgba = img.to_rgba8();
+    if bits == 32 && rgba.pixels().all(|p| p[3] == 0) {
+        rgba.pixels_mut().for_each(|p| p[3] = 255);
+    }
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(rgba).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).ok()?;
+    Some(png)
+}
+
+/// Parses a DROPFILES block (CF_HDROP).
+pub fn parse_hdrop(b: &[u8]) -> Vec<PathBuf> {
+    if b.len() < 20 {
+        return vec![];
+    }
+    let start = u32::from_le_bytes(b[0..4].try_into().unwrap()) as usize;
+    let wide = i32::from_le_bytes(b[16..20].try_into().unwrap()) != 0;
+    let Some(rest) = b.get(start..) else { return vec![] };
+    let names: Vec<String> = if wide {
+        let w: Vec<u16> = rest.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        w.split(|&c| c == 0).take_while(|s| !s.is_empty()).map(String::from_utf16_lossy).collect()
+    } else {
+        rest.split(|&c| c == 0).take_while(|s| !s.is_empty()).map(|s| String::from_utf8_lossy(s).into_owned()).collect()
+    };
+    names.into_iter().map(PathBuf::from).collect()
+}
+
 /// After a paste, a file pasted *as a file* (into a folder, an upload box) is read by that app a
 /// moment later, so it stays this long.
 pub const KEEP_AFTER_PASTE: std::time::Duration = std::time::Duration::from_secs(30);
@@ -121,10 +183,11 @@ mod imp {
     use std::time::Duration;
     use windows_sys::Win32::Foundation::{GlobalFree, HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::System::DataExchange::{
-        CloseClipboard, EmptyClipboard, GetClipboardOwner, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
+        CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardOwner, IsClipboardFormatAvailable, OpenClipboard,
+        RegisterClipboardFormatW, SetClipboardData,
     };
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-    use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, PostMessageW, RegisterClassW, HWND_MESSAGE,
         MSG, WNDCLASSW,
@@ -438,11 +501,78 @@ mod imp {
         let w: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
         submit(vec![(CF_UNICODETEXT, wide_bytes(&w))], vec![], None, None)
     }
+
+    /// The bytes of one clipboard format, if it is there. The clipboard must be open.
+    unsafe fn data(format: u32) -> Option<Vec<u8>> {
+        if IsClipboardFormatAvailable(format) == 0 {
+            return None;
+        }
+        let h = GetClipboardData(format);
+        if h.is_null() {
+            return None;
+        }
+        let size = GlobalSize(h as _);
+        let p = GlobalLock(h as _) as *const u8;
+        if p.is_null() {
+            return None;
+        }
+        let v = std::slice::from_raw_parts(p, size).to_vec();
+        GlobalUnlock(h as _);
+        Some(v)
+    }
+
+    pub fn get() -> Result<super::Clip, String> {
+        use super::Clip;
+        unsafe {
+            // Another app may hold it for a moment.
+            let mut open = false;
+            for _ in 0..20 {
+                if OpenClipboard(std::ptr::null_mut()) != 0 {
+                    open = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            if !open {
+                return Err("another app is using the clipboard".into());
+            }
+            let clip = if let Some(files) = data(CF_HDROP).map(|b| super::parse_hdrop(&b)).filter(|f| !f.is_empty()) {
+                Clip::Files(files)
+            } else if let Some(png) = data(register("PNG")).filter(|b| b.starts_with(b"\x89PNG")) {
+                Clip::Image(png)
+            } else if let Some(png) = data(CF_DIB).and_then(|b| super::dib_to_png(&b)) {
+                Clip::Image(png)
+            } else if let Some(t) = data(CF_UNICODETEXT) {
+                let w: Vec<u16> = t.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|&c| c != 0).collect();
+                let s = String::from_utf16_lossy(&w);
+                if s.is_empty() { Clip::Empty } else { Clip::Text(s) }
+            } else {
+                Clip::Empty
+            };
+            CloseClipboard();
+            Ok(clip)
+        }
+    }
 }
 
 #[cfg(not(windows))]
 mod imp {
     use super::{is_image, ClipMode};
+
+    pub fn get() -> Result<super::Clip, String> {
+        let out = |cmd: &str, args: &[&str]| Command::new(cmd).args(args).stderr(Stdio::null()).output().ok().filter(|o| o.status.success()).map(|o| o.stdout);
+        let text = if cfg!(target_os = "macos") {
+            out("pbpaste", &[])
+        } else if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            out("wl-paste", &["--no-newline"])
+        } else {
+            out("xclip", &["-selection", "clipboard", "-o"])
+        };
+        Ok(match text.map(|t| String::from_utf8_lossy(&t).into_owned()).filter(|t| !t.is_empty()) {
+            Some(t) => super::Clip::Text(t),
+            None => super::Clip::Empty,
+        })
+    }
     use std::io::Write;
     use std::path::PathBuf;
     use std::process::{Command, Stdio};
@@ -522,6 +652,27 @@ mod tests {
         // First stored row is the bottom one, BGRA.
         assert_eq!(&d[40 + 4..40 + 8], &[7, 8, 9, 255]);
         assert_eq!(&d[40 + 8..40 + 12], &[3, 2, 1, 255]);
+    }
+
+    #[test]
+    fn clipboard_bitmaps_and_file_lists_read_back() {
+        let mut img = image::RgbaImage::new(3, 2);
+        img.put_pixel(0, 0, image::Rgba([200, 10, 20, 255]));
+        let png = dib_to_png(&dib(&img)).expect("a DIB we wrote converts");
+        let back = image::load_from_memory(&png).unwrap().to_rgba8();
+        assert_eq!(back.dimensions(), (3, 2));
+        assert_eq!(back.get_pixel(0, 0), &image::Rgba([200, 10, 20, 255]));
+        assert!(dib_to_png(&[0; 10]).is_none());
+
+        let mut drop = vec![20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0];
+        for p in ["C:\\a.jpg", "D:\\תמונה.png"] {
+            for c in p.encode_utf16().chain(Some(0)) {
+                drop.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        drop.extend_from_slice(&[0, 0]);
+        assert_eq!(parse_hdrop(&drop), vec![PathBuf::from("C:\\a.jpg"), PathBuf::from("D:\\תמונה.png")]);
+        assert!(parse_hdrop(&[1, 2]).is_empty());
     }
 
     #[test]

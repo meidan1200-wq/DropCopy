@@ -34,6 +34,21 @@ public class SendService extends Service {
         c.startForegroundService(s);
     }
 
+    /**
+     * Collects what a PC sent to this phone ({@code pcHex}), or from every PC that says something
+     * is waiting (null). Runs as a short foreground job, like a send.
+     */
+    static void fetch(Context c, String pcHex) {
+        Intent s = new Intent(c, SendService.class).setAction(ACTION_FETCH).putExtra("pc", pcHex);
+        try {
+            c.startForegroundService(s);
+        } catch (RuntimeException e) {
+            // Android refused a background start: it is collected the next time the app runs.
+        }
+    }
+
+    static final String ACTION_FETCH = "dev.dropcopy.FETCH";
+
     static Notification.Builder notification(Context c, String channel, String title) {
         NotificationManager nm = c.getSystemService(NotificationManager.class);
         nm.createNotificationChannel(new NotificationChannel(channel,
@@ -43,9 +58,27 @@ public class SendService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        startForeground(1, notification(this, CHANNEL, "Sending to PC…").build());
+        boolean fetching = intent != null && ACTION_FETCH.equals(intent.getAction());
+        startForeground(1, notification(this, CHANNEL, fetching ? "Receiving from PC…" : "Sending to PC…").build());
         if (intent == null) {
             stopSelf(startId);
+            return START_NOT_STICKY;
+        }
+        if (fetching) {
+            String hex = intent.getStringExtra("pc");
+            exec.execute(() -> {
+                try {
+                    if (hex == null) {
+                        Receiver.collect(this);
+                    } else {
+                        for (Proto.Pc pc : Store.pcs(this)) if (pc.hexId().equals(hex)) Receiver.fetch(this, pc);
+                    }
+                } catch (Exception ignored) {
+                    // Still on the PC: it is collected next time.
+                } finally {
+                    stopSelf(startId);
+                }
+            });
             return START_NOT_STICKY;
         }
         @SuppressWarnings("deprecation")

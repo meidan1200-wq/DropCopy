@@ -49,6 +49,10 @@ public final class Proto {
     static final byte T_FILE = 0x01, T_DATA = 0x02, T_FILE_END = 0x03, T_TEXT = 0x04, T_END = 0x05;
     static final byte T_OK = 0x10, T_ERR = 0x11;
     static final byte T_OPTS = 0x06, T_DEVICE = 0x07;
+    /** v2: "after END, send me what is waiting for me", and "these are my other PCs". */
+    static final byte T_FETCH = 0x08, T_PEERS = 0x09;
+    /** v2 flags after the count in OK, and in the status answer. */
+    public static final int OK_WAITING = 0x01, OK_V2 = 0x80, STATUS_CLOSE = 0x0100;
     /** {@link #options} flags: a proximity preview (temporary), and "delete from the PC after pasting". */
     public static final int OPT_NEARBY = 0x01, OPT_DELETE_AFTER_PASTE = 0x02;
     static final byte[] HELLO = ascii("DCH1"), PULL = ascii("DCU1"),
@@ -57,6 +61,9 @@ public final class Proto {
     static final byte[] MAGIC = ascii("DCP1"), DISCOVER = ascii("DCD1"), REPLY = ascii("DCR1");
     static final byte[] PAIR_ASK = ascii("DCQ1"), PAIR_ANSWER = ascii("DCA1");
     static final byte[] NEAR_ASK = ascii("DCN1"), NEAR_ANSWER = ascii("DCM1"), L_NEARQ = ascii("dropcopy/v1/nearq");
+    static final byte[] ASK = ascii("DCD2"), STATUS = ascii("DCR2"), OFFER = ascii("DCO1");
+    static final byte[] L_ASK = ascii("dropcopy/v2/ask"), L_STATUS = ascii("dropcopy/v2/disc"),
+            L_OFFER = ascii("dropcopy/v2/offer"), L_PEER = ascii("dropcopy/v2/peer");
     static final byte[] L_SRV = ascii("dropcopy/v1/srv"), L_C2S = ascii("dropcopy/v1/c2s"),
             L_S2C = ascii("dropcopy/v1/s2c"), L_DISC = ascii("dropcopy/v1/disc");
 
@@ -72,6 +79,8 @@ public final class Proto {
         /** Where it was last reached; tried first, before any broadcast. */
         public volatile String host;
         public volatile int port;
+        /** It answered with v2 (fetch, introductions): newer records are safe to send it. */
+        public volatile boolean v2;
 
         public Pc(byte[] id, byte[] key, String name, String host, int port) {
             this.id = id;
@@ -93,6 +102,7 @@ public final class Proto {
                     .append("&k=").append(Base64.getUrlEncoder().withoutPadding().encodeToString(key))
                     .append("&n=").append(enc(name)).append("&p=").append(port);
             if (host != null && !host.isEmpty()) sb.append("&a=").append(host);
+            if (v2) sb.append("&v2=1");
             return sb.toString();
         }
 
@@ -117,7 +127,9 @@ public final class Proto {
             try { port = Integer.parseInt(p.getOrDefault("p", "" + TCP_PORT)); } catch (NumberFormatException ignored) { }
             String host = p.get("a");
             if (host != null && host.contains(",")) host = host.substring(0, host.indexOf(','));
-            return new Pc(id, key, name, host, port);
+            Pc pc = new Pc(id, key, name, host, port);
+            pc.v2 = "1".equals(p.get("v2"));
+            return pc;
         }
     }
 
@@ -134,8 +146,173 @@ public final class Proto {
         default int options() { return -1; }
         /** This phone's name, for a device item; else null. */
         default String device() { return null; }
-        /** Not a file: options, the device name, or text. */
-        default boolean isRecord() { return options() >= 0 || device() != null || text() != null; }
+        /** For an introductions item: the T_PEERS body for the PC that answered, or null. */
+        default byte[] introFor(Pc to) { return null; }
+        /** Not a file: options, the device name, text, or introductions. */
+        default boolean isRecord() { return options() >= 0 || device() != null || text() != null || introFor(null) != null; }
+    }
+
+    /** The key another PC uses with {@code pc}: HMAC(pc.key, "dropcopy/v2/peer" | other id). */
+    static byte[] peerKey(Pc pc, byte[] otherId) {
+        return hmac(pc.key, L_PEER, otherId);
+    }
+
+    /** The link that lets {@code to} send to {@code other}: a peer key for it, never other's own key. */
+    static String peerLink(Pc other, Pc to) {
+        StringBuilder sb = new StringBuilder("dropcopy://peer?v=2&id=").append(other.hexId())
+                .append("&k=").append(Base64.getUrlEncoder().withoutPadding().encodeToString(peerKey(other, to.id)))
+                .append("&n=").append(enc(other.name)).append("&p=").append(other.port);
+        if (other.host != null && !other.host.isEmpty()) sb.append("&a=").append(other.host);
+        return sb.toString();
+    }
+
+    /**
+     * Introduces each of {@code all} to whichever of them the transfer reaches, so the PCs can
+     * send to each other (PROTOCOL.md, "PC to PC"). Sent only to PCs that speak v2.
+     */
+    public static Item introductions(final List<Pc> all) {
+        return new Item() {
+            public String name() { return "peers"; }
+            public String mime() { return ""; }
+            public long size() { return 0; }
+            public InputStream open() { throw new UnsupportedOperationException(); }
+            public byte[] introFor(Pc to) {
+                if (to == null) return new byte[0];
+                ByteArrayOutputStream b = new ByteArrayOutputStream();
+                for (Pc o : all) {
+                    if (java.util.Arrays.equals(o.id, to.id)) continue;
+                    byte[] l = peerLink(o, to).getBytes(StandardCharsets.UTF_8);
+                    b.write(l.length >>> 8);
+                    b.write(l.length);
+                    b.write(l, 0, l.length);
+                }
+                return b.toByteArray();
+            }
+        };
+    }
+
+    /** True for an authentic "something is waiting for you, come and fetch it" from {@code pc}. */
+    static boolean isOffer(byte[] pkt, Pc pc) {
+        if (pkt.length != 44) return false;
+        for (int i = 0; i < 4; i++) if (pkt[i] != OFFER[i]) return false;
+        for (int i = 0; i < 8; i++) if (pkt[4 + i] != pc.id[i]) return false;
+        return MessageDigest.isEqual(slice(hmac(pc.key, L_OFFER, pc.id, slice(pkt, 12, 28)), 0, 16), slice(pkt, 28, 44));
+    }
+
+    /** What a v2 PC says when asked (PROTOCOL.md, "Which PC?"). */
+    public static final class Status {
+        public Pc pc;
+        public String host;
+        public int port;
+        /** Seconds since someone used its keyboard or mouse; 65535 = unknown or longer. */
+        public int idleSeconds;
+        /** This phone's Bluetooth signal there, or Short.MIN_VALUE. */
+        public int nearDbm;
+        public int flags;
+
+        public boolean close() { return (flags & STATUS_CLOSE) != 0; }
+        public boolean waiting() { return (flags & OK_WAITING) != 0; }
+    }
+
+    /** "DCD2" | id | from (zeros: a phone) | nonce[16] | HMAC(K, "dropcopy/v2/ask" | id | from | nonce)[..16] */
+    static byte[] askPacket(Pc pc, byte[] nonce) {
+        byte[] from = new byte[8];
+        return ByteBuffer.allocate(52).put(ASK).put(pc.id).put(from).put(nonce)
+                .put(hmac(pc.key, L_ASK, pc.id, from, nonce), 0, 16).array();
+    }
+
+    /** Decrypts an answer to {@link #askPacket}; null if it isn't one from {@code pc} to this question. */
+    static Status parseStatus(byte[] pkt, Pc pc, byte[] nonce) {
+        if (pkt.length != 48) return null;
+        for (int i = 0; i < 4; i++) if (pkt[i] != STATUS[i]) return null;
+        for (int i = 0; i < 8; i++) if (pkt[4 + i] != pc.id[i]) return null;
+        try {
+            Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
+            c.init(Cipher.DECRYPT_MODE, new SecretKeySpec(hmac(pc.key, L_STATUS), "AES"), new GCMParameterSpec(128, slice(pkt, 12, 24)));
+            c.updateAAD(ByteBuffer.allocate(36).put(STATUS).put(pc.id).put(new byte[8]).put(nonce).array());
+            byte[] body = c.doFinal(slice(pkt, 24, 48));
+            ByteBuffer b = ByteBuffer.wrap(body);
+            Status st = new Status();
+            st.pc = pc;
+            st.port = b.getShort() & 0xffff;
+            st.idleSeconds = b.getShort() & 0xffff;
+            st.nearDbm = b.getShort();
+            st.flags = b.getShort() & 0xffff;
+            return st;
+        } catch (GeneralSecurityException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Asks every paired PC "is someone using you?" and collects the answers for up to
+     * {@code waitMs} (less once all have answered). Older PCs don't answer; that is fine.
+     */
+    public static List<Status> ask(List<Pc> pcs, List<InetAddress> broadcasts, List<Route> routes, int waitMs) {
+        List<Status> out = new ArrayList<>();
+        java.util.Set<String> answered = new java.util.HashSet<>();
+        List<DatagramSocket> socks = new ArrayList<>();
+        byte[] nonce = random(16);
+        try {
+            for (Route route : routes) {
+                DatagramSocket u = new DatagramSocket();
+                try { route.bind(u); } catch (IOException e) { u.close(); continue; }
+                u.setBroadcast(true);
+                socks.add(u);
+                for (Pc pc : pcs) {
+                    byte[] pkt = askPacket(pc, nonce);
+                    List<InetAddress> to = new ArrayList<>();
+                    try { if (pc.host != null && !pc.host.isEmpty()) to.add(InetAddress.getByName(pc.host)); } catch (IOException ignored) { }
+                    to.addAll(broadcasts);
+                    for (InetAddress a : to) {
+                        try { u.send(new DatagramPacket(pkt, pkt.length, a, UDP_PORT)); } catch (IOException ignored) { }
+                    }
+                }
+            }
+            if (socks.isEmpty()) return out;
+            long deadline = System.currentTimeMillis() + waitMs;
+            byte[] buf = new byte[64];
+            int i = 0;
+            while (answered.size() < pcs.size()) {
+                long left = deadline - System.currentTimeMillis();
+                if (left <= 0) break;
+                DatagramSocket u = socks.get(i++ % socks.size());
+                u.setSoTimeout((int) Math.max(1, Math.min(left, socks.size() == 1 ? left : 15)));
+                DatagramPacket in = new DatagramPacket(buf, buf.length);
+                try { u.receive(in); } catch (SocketTimeoutException e) { continue; }
+                byte[] pkt = slice(buf, 0, in.getLength());
+                for (Pc pc : pcs) {
+                    Status st = parseStatus(pkt, pc, nonce);
+                    if (st == null || !answered.add(pc.hexId())) continue;
+                    st.host = in.getAddress().getHostAddress();
+                    pc.v2 = true;
+                    out.add(st);
+                }
+            }
+        } catch (IOException ignored) {
+            // No network: nothing answers, and the caller falls back to racing them all.
+        } finally {
+            for (DatagramSocket u : socks) u.close();
+        }
+        return out;
+    }
+
+    /** Someone used it this recently: they're sitting at it. */
+    public static final int IN_USE_SECONDS = 120;
+
+    /**
+     * The PC to send to, from their answers: the one the phone is held next to, else the one
+     * in use (most recently touched), else the most recently used of those that answered
+     * ({@code pcs} is in that order). Null when none answered.
+     */
+    public static Status choose(List<Pc> pcs, List<Status> answers) {
+        Status best = null;
+        for (Status s : answers) if (s.close() && (best == null || s.nearDbm > best.nearDbm)) best = s;
+        if (best != null) return best;
+        for (Status s : answers) if (s.idleSeconds < IN_USE_SECONDS && (best == null || s.idleSeconds < best.idleSeconds)) best = s;
+        if (best != null) return best;
+        for (Pc pc : pcs) for (Status s : answers) if (s.pc == pc) return s;
+        return null;
     }
 
     /** Tells the PC this phone's name ("Galaxy S20+"), shown when it connects. */
@@ -220,6 +397,8 @@ public final class Proto {
     }
 
     public static final class Result {
+        /** v2 flags from the PC's OK: {@link #OK_WAITING} means something waits there for this phone. */
+        public int flags;
         public Pc pc;
         public String host;
         public long bytes;
@@ -641,6 +820,11 @@ public final class Proto {
                     tx.write(out, T_DEVICE, utf8Upto64(it.device()));
                     continue;
                 }
+                if (it.introFor(null) != null) {
+                    byte[] body = it.introFor(c.pc);
+                    if (c.pc.v2 && body.length > 0) tx.write(out, T_PEERS, body);
+                    continue;
+                }
                 if (it.text() != null) {
                     tx.write(out, T_TEXT, it.text().getBytes(StandardCharsets.UTF_8));
                     continue;
@@ -666,9 +850,108 @@ public final class Proto {
                 throw new IOException(c.pc.name + ": " + new String(reply, 1, reply.length - 1, StandardCharsets.UTF_8));
             }
             if (reply[0] != T_OK) throw new IOException("unexpected reply from " + c.pc.name);
+            if (reply.length >= 4) {
+                res.flags = reply[3] & 0xff;
+                if ((res.flags & OK_V2) != 0) c.pc.v2 = true;
+            }
         }
         res.totalMillis = System.currentTimeMillis() - t0;
         return res;
+    }
+
+    /** Where fetched things go: the phone saves files and puts text on its clipboard. */
+    public interface Sink {
+        OutputStream begin(String name, String mime, long size) throws IOException;
+        /** The current file is complete. */
+        void end() throws IOException;
+        /** A file did not finish: remove it. */
+        void abort();
+        void text(String text) throws IOException;
+    }
+
+    /**
+     * Collects what {@code pc} keeps for this phone (sent from the PC). Confirms only after
+     * everything arrived, so an interrupted fetch leaves it waiting on the PC for next time.
+     * Returns how many items arrived.
+     */
+    public static int fetch(List<Pc> pcs, List<InetAddress> broadcasts, List<Route> routes, String device, Item intro, Sink sink) throws IOException {
+        Conn c = connect(pcs, broadcasts, routes, 4000);
+        c.pc.host = c.host;
+        c.pc.port = c.port;
+        int count = 0;
+        boolean open = false;
+        try (Socket s = c.socket) {
+            s.setSoTimeout(60_000);
+            DataInputStream in = new DataInputStream(new java.io.BufferedInputStream(s.getInputStream(), CHUNK + 64));
+            OutputStream out = new java.io.BufferedOutputStream(s.getOutputStream());
+            byte[] cn = random(16);
+            out.write(MAGIC);
+            out.write(cn);
+            out.flush();
+            byte[] resp = new byte[52];
+            in.readFully(resp);
+            byte[] sn = slice(resp, 4, 20);
+            if (!MessageDigest.isEqual(slice(resp, 0, 4), MAGIC)
+                    || !MessageDigest.isEqual(slice(resp, 20, 52), hmac(c.pc.key, L_SRV, cn, sn))) {
+                throw new IOException(c.pc.name + " did not recognise this phone - pair again");
+            }
+            Records tx = new Records(hmac(c.pc.key, L_C2S, cn, sn));
+            Records rx = new Records(hmac(c.pc.key, L_S2C, cn, sn));
+            if (device != null) tx.write(out, T_DEVICE, utf8Upto64(device));
+            if (intro != null) {
+                byte[] body = intro.introFor(c.pc);
+                if (body != null && body.length > 0) tx.write(out, T_PEERS, body);
+            }
+            tx.write(out, T_FETCH, new byte[0]);
+            tx.write(out, T_END, new byte[0]);
+            out.flush();
+            OutputStream file = null;
+            while (true) {
+                byte[] r = rx.read(in);
+                switch (r[0]) {
+                    case T_FILE: {
+                        if (file != null) throw new IOException("new file before the previous one ended");
+                        ByteBuffer b = ByteBuffer.wrap(r, 1, r.length - 1);
+                        long size = b.getLong();
+                        byte[] name = new byte[b.getShort() & 0xffff];
+                        b.get(name);
+                        byte[] mime = new byte[b.getShort() & 0xffff];
+                        b.get(mime);
+                        file = sink.begin(new String(name, StandardCharsets.UTF_8), new String(mime, StandardCharsets.UTF_8), size);
+                        open = true;
+                        break;
+                    }
+                    case T_DATA:
+                        if (file == null) throw new IOException("data outside a file");
+                        file.write(r, 1, r.length - 1);
+                        break;
+                    case T_FILE_END:
+                        if (file == null) throw new IOException("file end outside a file");
+                        file.close();
+                        file = null;
+                        sink.end();
+                        open = false;
+                        count++;
+                        break;
+                    case T_TEXT:
+                        sink.text(new String(r, 1, r.length - 1, StandardCharsets.UTF_8));
+                        count++;
+                        break;
+                    case T_OK:
+                        c.pc.v2 = true;
+                        // Everything arrived: now the PC may let go of it.
+                        tx.write(out, T_OK, new byte[]{(byte) (count >>> 8), (byte) count});
+                        out.flush();
+                        return count;
+                    case T_ERR:
+                        throw new IOException(c.pc.name + ": " + new String(r, 1, r.length - 1, StandardCharsets.UTF_8));
+                    default:
+                        throw new IOException("unexpected record from " + c.pc.name);
+                }
+            }
+        } finally {
+            if (open) sink.abort();
+        }
     }
 
     // ---- helpers -----------------------------------------------------------------------------
