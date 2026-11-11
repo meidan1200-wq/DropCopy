@@ -23,8 +23,11 @@ USAGE
                                   --new     new key: every paired phone must scan again
                                   --png     also save it as an image and open it
                                   --invert  for terminals with a light background
+  dropcopy share [--to NAME] [--text TEXT] [FILE...]
+                                send to your phone or another PC (Explorer: right-click >
+                                Send to > DropCopy); no FILE or text: the clipboard
   dropcopy send [--to HOST[:PORT]] [--text TEXT] [FILE...]
-                                send to a DropCopy receiver (another PC)
+                                send to a DropCopy receiver by address (testing)
   dropcopy dir [PATH]           show or change where received files are saved
   dropcopy name [NAME]          show or change the name phones see
   dropcopy setup                Windows: run in the background, start with Windows
@@ -149,6 +152,7 @@ fn run(a: Args) -> Result<(), String> {
             Ok(())
         }
         Some("send") => send(&mut cfg, &a),
+        Some("share") => share(&cfg, &a),
         Some("dir") => {
             if let Some(p) = a.rest.first() {
                 let p = std::path::absolute(p).map_err(|e| e.to_string())?;
@@ -288,6 +292,12 @@ fn serve(cfg: Config, a: &Args) -> Result<(), String> {
     }
     if a.background {
         dropcopy::log_to(&cfg.home);
+        // Copies that updated themselves never ran setup again: add Explorer's "Send to" entry here.
+        if cfg!(windows) && dropcopy::sendto::sendto_dir().is_some_and(|d| !d.join("DropCopy.lnk").exists()) {
+            if let Ok(exe) = std::env::current_exe() {
+                let _ = dropcopy::sendto::install_shortcut(&exe);
+            }
+        }
     }
     let cfg = Arc::new(cfg);
     dropcopy::update::cleanup();
@@ -328,6 +338,7 @@ fn serve(cfg: Config, a: &Args) -> Result<(), String> {
         home: cfg.home.clone(),
         link: pair::link(&cfg, server.port),
         update: update_from_tray,
+        config: (*cfg).clone(),
     });
     if cfg.near && cfg.popup {
         let me = cfg.clone();
@@ -471,6 +482,41 @@ fn send(cfg: &mut Config, a: &Args) -> Result<(), String> {
         let _ = cfg.save();
     }
     Ok(())
+}
+
+/// Explorer's "Send to > DropCopy" (and `dropcopy share` in a terminal): pick a phone or PC,
+/// send, and say how it went in a Windows notification.
+fn share(cfg: &Config, a: &Args) -> Result<(), String> {
+    use dropcopy::sendto::{self, What};
+    let mut what = What::files(a.rest.iter().map(PathBuf::from).filter(|p| p.is_file()).collect());
+    if !a.texts.is_empty() {
+        what.text = Some(a.texts.join("\n"));
+    }
+    if what.files.is_empty() && what.text.is_none() {
+        if !a.rest.is_empty() {
+            let msg = "Folders can't be sent yet - pick the files inside";
+            dropcopy::tray::toast_from_anywhere("Nothing sent", msg);
+            return Err(msg.into());
+        }
+        what = What::clipboard(cfg)?;
+    }
+    let targets = sendto::targets(cfg);
+    if targets.is_empty() {
+        let msg = "Pair your phone first: open DropCopy on it. PCs appear here once your phone has met them both.";
+        dropcopy::tray::toast_from_anywhere("Nowhere to send yet", msg);
+        return Err(msg.into());
+    }
+    let chosen = match &a.to {
+        Some(name) => targets.iter().position(|t| t.name().eq_ignore_ascii_case(name)).ok_or_else(|| format!("no phone or PC called {name}"))?,
+        None => match sendto::pick("Send with DropCopy", &what.describe(), &targets) {
+            Some(i) => i,
+            None => return Ok(()),
+        },
+    };
+    let out = sendto::deliver(cfg, &targets[chosen], what);
+    say!("  {}: {}", out.title, out.text);
+    dropcopy::tray::toast_from_anywhere(&out.title, &out.text);
+    if out.ok { Ok(()) } else { Err(out.text) }
 }
 
 fn open_file(p: &std::path::Path) {
@@ -705,6 +751,10 @@ mod setup {
         if !quiet(Command::new("reg").args(["add", RUN_KEY, "/v", "DropCopy", "/t", "REG_SZ", "/d", &value, "/f"])) {
             return Err("could not add DropCopy to startup".into());
         }
+        // Right-click a file > Send to > DropCopy: to the phone or another PC.
+        if let Err(e) = dropcopy::sendto::install_shortcut(&target) {
+            say!("  ! Send to shortcut: {e}");
+        }
         if verbose {
             say!("  Installed to {exe}");
             say!("  It starts hidden every time you sign in, and waits quietly when there is no network.");
@@ -781,6 +831,7 @@ mod setup {
     pub fn uninstall() -> Result<(), String> {
         stop_background();
         quiet(Command::new("reg").args(["delete", RUN_KEY, "/v", "DropCopy", "/f"]));
+        dropcopy::sendto::remove_shortcut();
         quiet(Command::new("netsh").raw_arg("advfirewall firewall delete rule name=DropCopy"));
         if let Some(exe) = installed_exe() {
             let _ = std::fs::remove_file(exe);

@@ -44,3 +44,28 @@ where supported, with the typed address staying the main path.
   first, PC second → name appears in the tray on the next check-in.
 - **Release builds:** a test that needs a fixed port must skip, not fail, when the port is taken
   (`Server::discovering()`); stress tests must delete their files (a full disk failed a run).
+
+## v0.6 (built 2026-11-11, being tested): one share icon, PC to phone, PC to PC
+See README ("From the PC") and PROTOCOL.md ("v2"). Choices made, to confirm with the user:
+- *Receive from your PCs* is **on by default** (a sleeping UDP socket while the screen is on, no
+  Bluetooth; it does keep the low-priority DropCopy notification). Turn off in the app.
+- The single share icon is labelled with the PC's name (one PC) or "My PC" (several).
+
+## v0.6, round 2 (built 2026-11-11, being tested): phone to phone, with the warp
+- **Pairing.** Phones → *Show my code* on one phone, *Scan a phone* on the other. One scan pairs both
+  ways (the scanner's hello carries its own link). PROTOCOL.md, "Phone to phone".
+- **Receiving** runs while the screen is on, only once a phone is paired (or while the code shows).
+- **Share sheet.** Each paired phone has its own icon in the top row (up to three), next to the one
+  PC icon. With no PC paired, plain *Share → DropCopy* goes to the last phone used.
+- **The warp (pictures only), a black hole at the camera.** Sender: the share sheet closes, the front
+  camera's punch-hole (the display cutout) opens a little with darkness round it and a thin turning
+  ring, and the picture is pulled into it row by row, stretching and curling in faster as it falls
+  (a mesh, `Warp.java`); a ripple spreads as the hole closes. Receiver: the same out of its camera
+  hole over the home screen, then it rests and fades into the notification. Asked 2026-11-11: "like
+  sucking into a black hole ... the hole of the camera", keeping the first version's feel. Drawn
+  over other apps, so the receiver needs *Display over other apps* (a "Needs your OK" row); without it
+  the picture only comes as a notification. Changed from the first plan: no full-screen intent, since
+  Android only opens those on a locked screen. `jvmtest/WarpPreview.java` draws the same frames on a
+  desktop.
+- Not done: a proximity check (Bluetooth RSSI between phones). Phones on the same Wi-Fi are enough to
+  send; "close" is not required. Nearby Connections (no shared Wi-Fi) is still a maybe.

@@ -15,15 +15,18 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * While "Show on PC when near" is on and the screen is on: tells the PC where this phone is, and
- * when the PC says the phone just came close, sends it the newest photo as a preview. The PC keeps
- * that preview as a temporary file and shows it on the taskbar phone; nothing else changes there.
+ * While the screen is on, and "Show on PC when near" or "Receive from your PCs" is on: tells the
+ * PCs where this phone is. When a PC says the phone just came close, sends it the newest photo as
+ * a preview (the PC keeps it as a temporary file on the taskbar phone). When a PC says it has
+ * something for this phone (an offer), collects it.
  */
 class NearLink {
     private static final int HELLO_EVERY_MS = 15_000;
     /** The PC asks again each time the phone comes close; one preview per few seconds is plenty. */
     private static final int MIN_GAP_MS = 5_000;
 
+    private static final int OFFER_GAP_MS = 3_000;
+    private final java.util.Map<String, Long> lastOffer = new java.util.HashMap<>();
     private final Context ctx;
     private volatile DatagramSocket sock;
 
@@ -68,12 +71,17 @@ class NearLink {
             Proto.Pc pc = pcs.get(0);
             long now = System.currentTimeMillis();
             if (now >= nextHello) {
-                byte[] hello = Proto.helloPacket(pc);
-                List<InetAddress> to = new ArrayList<>();
-                try { if (pc.host != null && !pc.host.isEmpty()) to.add(InetAddress.getByName(pc.host)); } catch (IOException ignored) { }
-                to.addAll(Proto.broadcastAddresses());
-                for (InetAddress a : to) {
-                    try { s.send(new DatagramPacket(hello, hello.length, a, Proto.UDP_PORT)); } catch (IOException ignored) { }
+                // Proximity is about the last PC used; receiving is from any of them.
+                List<Proto.Pc> greet = Store.receive(ctx) ? pcs : pcs.subList(0, 1);
+                List<InetAddress> broadcast = Proto.broadcastAddresses();
+                for (Proto.Pc each : greet) {
+                    byte[] hello = Proto.helloPacket(each);
+                    List<InetAddress> to = new ArrayList<>();
+                    try { if (each.host != null && !each.host.isEmpty()) to.add(InetAddress.getByName(each.host)); } catch (IOException ignored) { }
+                    to.addAll(broadcast);
+                    for (InetAddress a : to) {
+                        try { s.send(new DatagramPacket(hello, hello.length, a, Proto.UDP_PORT)); } catch (IOException ignored) { }
+                    }
                 }
                 nextHello = now + HELLO_EVERY_MS;
             }
@@ -88,6 +96,18 @@ class NearLink {
                 return; // closed by stop()
             }
             byte[] pkt = Proto.slice(buf, 0, p.getLength());
+            if (Store.receive(ctx)) {
+                for (Proto.Pc each : pcs) {
+                    if (!Proto.isOffer(pkt, each)) continue;
+                    // The PC sends each knock twice and repeats it while it waits: collect once.
+                    Long last = lastOffer.get(each.hexId());
+                    if (last != null && System.currentTimeMillis() - last < OFFER_GAP_MS) break;
+                    lastOffer.put(each.hexId(), System.currentTimeMillis());
+                    each.host = p.getAddress().getHostAddress();
+                    SendService.fetch(ctx, each.hexId());
+                    break;
+                }
+            }
             if (!Proto.isPull(pkt, pc)) continue;
             byte[] nonce = Proto.slice(pkt, 12, 28);
             if (Arrays.equals(nonce, lastNonce) || System.currentTimeMillis() - lastSent < MIN_GAP_MS) continue; // the PC sends it twice

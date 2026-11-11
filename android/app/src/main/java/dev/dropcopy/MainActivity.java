@@ -8,6 +8,7 @@ import android.bluetooth.BluetoothManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.widget.ProgressBar;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
@@ -34,7 +35,7 @@ public class MainActivity extends Activity {
     private TextView pcName, pcDetail, statusMessage;
     private ImageView dot;
     private Button scan, check;
-    private Switch shots, camera, near, updates, deleteAfter;
+    private Switch shots, camera, near, updates, deleteAfter, receive;
     private View updateCard, needsCard;
     private Updater.Release pendingUpdate;
     private boolean checking, asking;
@@ -84,6 +85,7 @@ public class MainActivity extends Activity {
         near = findViewById(R.id.sw_near);
         updates = findViewById(R.id.sw_updates);
         deleteAfter = findViewById(R.id.sw_delete);
+        receive = findViewById(R.id.sw_receive);
         updateCard = findViewById(R.id.update_card);
         needsCard = findViewById(R.id.needs_card);
         ((TextView) findViewById(R.id.version)).setText("v" + BuildConfig.VERSION_NAME);
@@ -119,6 +121,15 @@ public class MainActivity extends Activity {
         findViewById(R.id.install_allow).setOnClickListener(v ->
                 startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:" + getPackageName()))));
         findViewById(R.id.update_install).setOnClickListener(v -> installUpdate());
+        findViewById(R.id.overlay_allow).setOnClickListener(v ->
+                startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName()))));
+        findViewById(R.id.phone_code).setOnClickListener(v -> showMyCode());
+        findViewById(R.id.phone_scan).setOnClickListener(v -> scan());
+        findViewById(R.id.phones_forget).setOnClickListener(v -> {
+            for (Proto.Pc p : Store.phones(this)) Store.forgetPhone(this, p.hexId());
+            WatchService.sync(this);
+            refresh();
+        });
         findViewById(R.id.forget).setOnClickListener(v -> {
             Store.forgetAll(this);
             for (String k : new String[]{Store.WATCH_SCREENSHOTS, Store.WATCH_CAMERA, Store.NEAR, Store.DELETE_AFTER_PASTE}) Store.setFlag(this, k, false);
@@ -136,6 +147,13 @@ public class MainActivity extends Activity {
         // Already on: tapping the row reopens the setup and its live check; the switch turns it off.
         findViewById(R.id.row_near).setOnClickListener(v -> {
             if (near.isChecked()) showNearSetup(); else near.toggle();
+        });
+        receive.setChecked(Store.receive(this));
+        findViewById(R.id.row_receive).setOnClickListener(v -> receive.toggle());
+        receive.setOnCheckedChangeListener((b, on) -> {
+            Store.setFlag(this, Store.RECEIVE, on);
+            WatchService.sync(this);
+            refresh();
         });
         bindDeleteAfterPaste();
         updates.setChecked(Store.autoUpdate(this));
@@ -156,7 +174,15 @@ public class MainActivity extends Activity {
         super.onResume();
         current = new java.lang.ref.WeakReference<>(this);
         refresh(); // e.g. back from the battery or permission settings
-        if (Store.pcs(this).isEmpty()) askPcToShowCode(false);
+        if (Store.pcs(this).isEmpty()) {
+            askPcToShowCode(false);
+        } else {
+            // Opening the app collects anything a PC sent to this phone meanwhile.
+            Context app = getApplicationContext();
+            new Thread(() -> { try { Receiver.collect(app); } catch (RuntimeException ignored) { } }, "collect").start();
+            WatchService.sync(this);
+        }
+        if (!Store.phones(this).isEmpty()) WatchService.sync(this); // other phones can send while the screen is on
     }
 
     /**
@@ -475,6 +501,7 @@ public class MainActivity extends Activity {
     }
 
     private void refresh() {
+        refreshPhones();
         List<Proto.Pc> pcs = Store.pcs(this);
         boolean paired = !pcs.isEmpty();
         check.setVisibility(paired ? View.VISIBLE : View.GONE);
@@ -506,7 +533,9 @@ public class MainActivity extends Activity {
      * until paired, so the first screen is only about pairing.
      */
     private void refreshNeeds(boolean paired) {
-        boolean background = shots.isChecked() || camera.isChecked() || near.isChecked();
+        boolean phones = !Store.phones(this).isEmpty();
+        paired |= phones;
+        boolean background = shots.isChecked() || camera.isChecked() || near.isChecked() || receive.isChecked() || phones;
         PowerManager pm = getSystemService(PowerManager.class);
         boolean exempt = pm == null || pm.isIgnoringBatteryOptimizations(getPackageName());
         boolean notifications = Build.VERSION.SDK_INT < 33
@@ -526,9 +555,10 @@ public class MainActivity extends Activity {
                 (background || auto) && !notifications,
                 wantsPhotos && !photosOk,
                 auto && !getPackageManager().canRequestPackageInstalls(),
+                phones && !WarpOverlay.allowed(this),
         };
-        int[] rows = {R.id.row_ok_battery, R.id.row_ok_oem, R.id.row_ok_notify, R.id.row_ok_photos, R.id.row_ok_install};
-        int[] dividers = {R.id.row_ok_battery_div, R.id.row_ok_oem_div, R.id.row_ok_notify_div, R.id.row_ok_photos_div, R.id.row_ok_install_div};
+        int[] rows = {R.id.row_ok_battery, R.id.row_ok_oem, R.id.row_ok_notify, R.id.row_ok_photos, R.id.row_ok_install, R.id.row_ok_overlay};
+        int[] dividers = {R.id.row_ok_battery_div, R.id.row_ok_oem_div, R.id.row_ok_notify_div, R.id.row_ok_photos_div, R.id.row_ok_install_div, R.id.row_ok_overlay_div};
         boolean any = false;
         for (int i = 0; i < rows.length; i++) {
             boolean on = paired && show[i];
@@ -580,15 +610,111 @@ public class MainActivity extends Activity {
 
     private void pair(String link) {
         try {
+            if (Proto.Pc.parse(link).phone) {
+                pairPhone(Proto.Pc.parse(link));
+                return;
+            }
             Proto.Pc pc = Store.add(this, link);
             waitingPc = null;
             findViewById(R.id.paste_row).setVisibility(View.GONE);
             refresh();
             requestPermissionsIfNeeded();
+            WatchService.sync(this); // receiving from PCs starts with the pairing, not the next app start
             Transfer.toast(this, "Paired with " + pc.name);
             check();
         } catch (IllegalArgumentException e) {
             Transfer.toast(this, "That isn't a DropCopy pairing code");
+        }
+    }
+
+    // ---- other phones ----------------------------------------------------------------------
+
+    private void refreshPhones() {
+        List<Proto.Pc> phones = Store.phones(this);
+        TextView title = findViewById(R.id.phones_title), detail = findViewById(R.id.phones_detail);
+        if (phones.isEmpty()) {
+            title.setText("Send to another phone");
+            detail.setText("Pictures warp from one phone to the other. Both need DropCopy and the same Wi-Fi.");
+        } else {
+            List<String> names = new ArrayList<>();
+            for (Proto.Pc p : phones) names.add(p.name);
+            title.setText(String.join(", ", names));
+            detail.setText("Share → its icon at the top of the share sheet. It receives while its screen is on.");
+        }
+        findViewById(R.id.phones_forget).setVisibility(phones.isEmpty() ? View.GONE : View.VISIBLE);
+    }
+
+    /** Scanned another phone's code: remember it and say hello, so it knows this phone back. */
+    private void pairPhone(Proto.Pc phone) {
+        Store.rememberPhone(this, phone);
+        WatchService.sync(this);
+        refresh();
+        String hex = phone.hexId();
+        Context app = getApplicationContext();
+        new Thread(() -> {
+            String msg;
+            try {
+                Transfer.sendToPhone(app, new ArrayList<>(), hex, null);
+                msg = "Paired with " + phone.name + ". Share a picture to it from the share sheet.";
+            } catch (IOException e) {
+                msg = "Saved " + phone.name + ", but couldn't reach it. Keep its code on screen, on the same Wi-Fi, and scan again.";
+            }
+            Transfer.toast(app, msg);
+            runOnUiThread(this::refresh);
+        }, "pair-phone").start();
+    }
+
+    /** This phone's code, for another phone to scan. It listens while the code is on screen. */
+    private void showMyCode() {
+        if (PcSetup.localAddress() == null) {
+            Transfer.toast(this, "Connect to Wi-Fi first: both phones need the same one");
+            return;
+        }
+        PhoneServer.hold(this, "code");
+        android.graphics.Bitmap qr = qr(Store.me(this).toLink(), dp(240));
+        Dialog d = new Dialog(this);
+        d.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
+        d.setContentView(R.layout.dialog_my_code);
+        if (d.getWindow() != null) {
+            d.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+            d.getWindow().setLayout(Math.min(getResources().getDisplayMetrics().widthPixels - dp(32), dp(420)), android.view.ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+        ((ImageView) d.findViewById(R.id.code_image)).setImageBitmap(qr);
+        ((TextView) d.findViewById(R.id.code_title)).setText(Transfer.deviceName(this));
+        TextView status = d.findViewById(R.id.code_status);
+        ImageView cdot = d.findViewById(R.id.code_dot);
+        tint(cdot, R.color.accent);
+        d.findViewById(R.id.code_done).setOnClickListener(v -> d.dismiss());
+        PhoneServer.onPaired = name -> runOnUiThread(() -> {
+            tint(cdot, R.color.ok);
+            status.setText("Paired with " + name);
+            refresh();
+            WatchService.sync(this);
+            new Handler(Looper.getMainLooper()).postDelayed(() -> { if (d.isShowing()) d.dismiss(); }, 1500);
+        });
+        d.setOnDismissListener(x -> {
+            PhoneServer.onPaired = null;
+            PhoneServer.release("code");
+            WatchService.sync(this);
+        });
+        d.show();
+    }
+
+    /** A QR code: black on white with its quiet zone, {@code size} pixels square. */
+    static android.graphics.Bitmap qr(String text, int size) {
+        try {
+            java.util.Map<com.google.zxing.EncodeHintType, Object> hints = new java.util.EnumMap<>(com.google.zxing.EncodeHintType.class);
+            hints.put(com.google.zxing.EncodeHintType.MARGIN, 2);
+            hints.put(com.google.zxing.EncodeHintType.ERROR_CORRECTION, com.google.zxing.qrcode.decoder.ErrorCorrectionLevel.M);
+            com.google.zxing.common.BitMatrix m = new com.google.zxing.qrcode.QRCodeWriter()
+                    .encode(text, com.google.zxing.BarcodeFormat.QR_CODE, size, size, hints);
+            int[] px = new int[m.getWidth() * m.getHeight()];
+            for (int y = 0; y < m.getHeight(); y++) {
+                for (int x = 0; x < m.getWidth(); x++) px[y * m.getWidth() + x] = m.get(x, y) ? 0xFF16181B : 0xFFFFFFFF;
+            }
+            return android.graphics.Bitmap.createBitmap(px, m.getWidth(), m.getHeight(), android.graphics.Bitmap.Config.ARGB_8888);
+        } catch (com.google.zxing.WriterException e) {
+            return null;
         }
     }
 

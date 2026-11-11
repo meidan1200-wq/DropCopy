@@ -2,7 +2,9 @@ package dev.dropcopy;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assume.assumeFalse;
 import static org.robolectric.Shadows.shadowOf;
@@ -335,7 +337,43 @@ public class AppTest {
         assertEquals(1, shortcuts.size());
         assertEquals("My PC", shortcuts.get(0).getShortLabel().toString());
         assertTrue(shortcuts.get(0).getCategories().contains(Store.CATEGORY));
-        assertEquals("pc-0011223344556677", shortcuts.get(0).getId());
+        assertEquals(Store.AUTO_SHORTCUT, shortcuts.get(0).getId());
+    }
+
+    @Test
+    public void twoPcsStillMeanOneShareIconThatPicksByItself() {
+        Store.add(app, LINK);
+        Store.add(app, LINK.replace("0011223344556677", "8899aabbccddeeff").replace("My%20PC", "Desk"));
+        List<ShortcutInfo> shortcuts = app.getSystemService(ShortcutManager.class).getDynamicShortcuts();
+        assertEquals("one icon in the top row, not one per PC", 1, shortcuts.size());
+        assertEquals("My PC", shortcuts.get(0).getShortLabel().toString());
+        assertEquals("Send to my PC", shortcuts.get(0).getLongLabel().toString());
+
+        // Its tap carries no PC: SendService asks which one is in use.
+        Intent share = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, "x")
+                .putExtra(Intent.EXTRA_SHORTCUT_ID, Store.AUTO_SHORTCUT);
+        Robolectric.buildActivity(ShareActivity.class, share).create();
+        Intent svc = shadowOf(app).getNextStartedService();
+        assertEquals(SendService.class.getName(), svc.getComponent().getClassName());
+        assertNull(svc.getStringExtra("pc"));
+
+        // An icon an older version left behind for one PC also picks by itself now.
+        Robolectric.buildActivity(ShareActivity.class, share.putExtra(Intent.EXTRA_SHORTCUT_ID, "pc-0011223344556677")).create();
+        assertNull(shadowOf(app).getNextStartedService().getStringExtra("pc"));
+    }
+
+    @Test
+    public void pcsAreIntroducedWithAPeerKeyNotTheirOwn() {
+        Proto.Pc a = Proto.Pc.parse(LINK);
+        Proto.Pc b = Proto.Pc.parse(LINK.replace("0011223344556677", "8899aabbccddeeff").replace("My%20PC", "Desk"));
+        String link = Proto.peerLink(b, a);
+        assertTrue(link.startsWith("dropcopy://peer?v=2&id=8899aabbccddeeff&k="));
+        assertFalse("never the other PC's own key", link.contains(java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(b.key)));
+        byte[] body = Proto.introductions(java.util.Arrays.asList(a, b)).introFor(a);
+        assertEquals(link, new String(body, 2, body.length - 2, java.nio.charset.StandardCharsets.UTF_8));
+        // The v2 mark survives being stored.
+        a.v2 = true;
+        assertTrue(Proto.Pc.parse(a.toLink()).v2);
     }
 
     @Test
@@ -514,5 +552,50 @@ public class AppTest {
         Intent svc = shadowOf(app).getNextStartedService();
         assertNotNull(svc);
         assertEquals(WatchService.class.getName(), svc.getComponent().getClassName());
+    }
+
+    private static final String PHONE_LINK = "dropcopy://pair?v=1&id=a1a2a3a4a5a6a7a8"
+            + "&k=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&n=Galaxy%20S26&p=48650&a=192.0.2.9&t=phone";
+
+    @Test
+    public void scanningAnotherPhoneGivesItItsOwnShareIcon() {
+        Store.add(app, LINK);
+        Robolectric.buildActivity(MainActivity.class, new Intent(Intent.ACTION_VIEW, Uri.parse(PHONE_LINK))).setup();
+        assertEquals("a phone is not a PC", 1, Store.pcs(app).size());
+        List<Proto.Pc> phones = Store.phones(app);
+        assertEquals(1, phones.size());
+        assertEquals("Galaxy S26", phones.get(0).name);
+        assertTrue(phones.get(0).phone);
+
+        List<ShortcutInfo> shortcuts = app.getSystemService(ShortcutManager.class).getDynamicShortcuts();
+        assertEquals("my PC and the phone", 2, shortcuts.size());
+        ShortcutInfo phone = null;
+        for (ShortcutInfo si : shortcuts) if (si.getId().startsWith(Store.PHONE_SHORTCUT)) phone = si;
+        assertNotNull(phone);
+        assertEquals("Galaxy S26", phone.getShortLabel().toString());
+        assertTrue(phone.getCategories().contains(Store.CATEGORY));
+
+        // Its icon sends to that phone, not to a PC.
+        Intent share = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, "hi")
+                .putExtra(Intent.EXTRA_SHORTCUT_ID, phone.getId());
+        Robolectric.buildActivity(ShareActivity.class, share).create();
+        Intent svc = null;
+        for (Intent i; (i = shadowOf(app).getNextStartedService()) != null; ) {
+            if (SendService.class.getName().equals(i.getComponent().getClassName())) svc = i;
+        }
+        assertNotNull(svc);
+        assertEquals(SendService.PHONE + "a1a2a3a4a5a6a7a8", svc.getStringExtra("pc"));
+    }
+
+    @Test
+    public void thisPhonesOwnCodeIsStableAndNeverPairsWithItself() {
+        Proto.Pc me = Store.me(app);
+        assertTrue(me.phone);
+        assertEquals(me.hexId(), Store.me(app).hexId());
+        assertArrayEquals(me.key, Store.me(app).key);
+        Proto.Pc parsed = Proto.Pc.parse(me.toLink());
+        assertTrue("the code says it is a phone", parsed.phone);
+        Store.rememberPhone(app, parsed);
+        assertTrue(Store.phones(app).isEmpty());
     }
 }

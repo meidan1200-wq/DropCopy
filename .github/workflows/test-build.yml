@@ -1,0 +1,80 @@
+name: Test build
+
+# Every push to a work branch (claude/...) builds and tests both apps and attaches them to the run
+# (Actions tab > Test build > the run > Artifacts) for trying on real devices. Publishes no release.
+# The version is 0.5.99: newer than any 0.5.x (so it installs over it), older than the next
+# release (so both apps update themselves to it once it is out).
+on:
+  push:
+    branches: ["claude/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stamp the test version
+        shell: bash
+        run: sed -i '0,/^version = .*/s//version = "0.5.99"/' pc/Cargo.toml
+      - run: cargo test --release
+        working-directory: pc
+      - shell: bash
+        working-directory: pc
+        run: |
+          cargo build --release
+          cp target/release/dropcopy.exe dropcopy-cli.exe
+          cargo build --release --features gui
+          cp target/release/dropcopy.exe DropCopy-Setup-test.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DropCopy-Setup-test (Windows)
+          path: |
+            pc/DropCopy-Setup-test.exe
+            pc/dropcopy-cli.exe
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      # Signed with the release key when it is available, so it installs over the released app.
+      - name: Release key
+        env:
+          KEYSTORE_B64: ${{ secrets.DROPCOPY_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KEYSTORE_B64" ]; then echo "::warning::No release key: this APK can't install over the released app"; exit 0; fi
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/dropcopy.p12"
+          echo "DROPCOPY_KEYSTORE=$RUNNER_TEMP/dropcopy.p12" >> "$GITHUB_ENV"
+      - name: Build and test
+        working-directory: android
+        env:
+          DROPCOPY_KEYSTORE_PASSWORD: ${{ secrets.DROPCOPY_KEYSTORE_PASSWORD }}
+        run: ./gradlew --no-daemon -PappVersionName=0.5.99 -PappVersionCode=599 assembleRelease testReleaseUnitTest
+      - name: Protocol against the real PC receiver
+        run: |
+          (cd pc && cargo build --release)
+          cd android/jvmtest
+          javac -d out ../app/src/main/java/dev/dropcopy/Proto.java V2Test.java
+          java -cp out V2Test ../../pc/target/release/dropcopy
+      - name: Phone to phone, and the warp's geometry
+        run: |
+          cd android/jvmtest
+          javac -d out-phone ../app/src/main/java/dev/dropcopy/Proto.java ../app/src/main/java/dev/dropcopy/Warp.java PhoneTest.java
+          java -cp out-phone dev.dropcopy.PhoneTest
+      - run: mv android/app/build/outputs/apk/release/app-release.apk DropCopy-test.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DropCopy-test (Android)
+          path: DropCopy-test.apk
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-reports
+          path: android/app/build/reports/tests
