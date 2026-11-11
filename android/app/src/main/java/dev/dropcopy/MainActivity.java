@@ -601,6 +601,7 @@ public class MainActivity extends Activity {
             findViewById(R.id.paste_row).setVisibility(View.GONE);
             refresh();
             requestPermissionsIfNeeded();
+            WatchService.sync(this); // receiving from PCs starts with the pairing, not the next app start
             Transfer.toast(this, "Paired with " + pc.name);
             check();
         } catch (IllegalArgumentException e) {
