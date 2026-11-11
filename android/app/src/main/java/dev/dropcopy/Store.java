@@ -22,6 +22,23 @@ final class Store {
         return c.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
+    /**
+     * A random id made once per install: PCs tell apart two phones with the same name by it
+     * ("Galaxy S20+" and "Galaxy S20+"), so one never collects what was sent to the other.
+     */
+    static synchronized String phoneId(Context c) {
+        String id = prefs(c).getString("phone_id", null);
+        if (id == null) {
+            byte[] b = new byte[8];
+            new java.security.SecureRandom().nextBytes(b);
+            StringBuilder sb = new StringBuilder();
+            for (byte x : b) sb.append(String.format("%02x", x & 0xff));
+            id = sb.toString();
+            prefs(c).edit().putString("phone_id", id).apply();
+        }
+        return id;
+    }
+
     static synchronized List<Proto.Pc> pcs(Context c) {
         List<Proto.Pc> out = new ArrayList<>();
         for (String line : prefs(c).getString("pcs", "").split("\n")) {

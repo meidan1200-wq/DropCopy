@@ -184,20 +184,47 @@ impl Config {
 const PAIRED: &str = "paired";
 const LAST_PHONE: &str = "last-phone.txt";
 
+/// A phone that connected: the name it gives ("Galaxy S20+") and, from v0.6, a random id it keeps
+/// for as long as the app is installed, which tells apart two phones of the same name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Phone {
+    pub name: String,
+    pub id: Option<String>,
+}
+
 /// Phones that connected, most recent first (at most 3), for the setup window and the tray.
-pub fn remember_phone(home: &Path, name: &str) {
-    let mut list = phones(home);
-    if list.first().map(String::as_str) == Some(name) {
+/// One per line: the name, then a tab and the id when the phone sent one.
+pub fn remember_phone(home: &Path, name: &str, id: Option<&str>) {
+    let me = Phone { name: name.to_string(), id: id.map(str::to_string) };
+    let mut list = phone_list(home);
+    if list.first() == Some(&me) {
         return;
     }
-    list.retain(|p| p != name);
-    list.insert(0, name.to_string());
+    // The same phone: the same id, or (an older app, or the line from before it sent one) the same name without one.
+    list.retain(|p| match (&p.id, &me.id) {
+        (Some(a), Some(b)) => a != b,
+        _ => p.id.is_some() || p.name != me.name,
+    });
+    list.insert(0, me);
     list.truncate(3);
-    let _ = fs::write(home.join(LAST_PHONE), list.join("\n"));
+    let lines: Vec<String> = list.iter().map(|p| match &p.id { Some(id) => format!("{}\t{id}", p.name), None => p.name.clone() }).collect();
+    let _ = fs::write(home.join(LAST_PHONE), lines.join("\n"));
+}
+
+pub fn phone_list(home: &Path) -> Vec<Phone> {
+    fs::read_to_string(home.join(LAST_PHONE))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            let (name, id) = l.split_once('\t').map(|(n, i)| (n, Some(i.trim().to_string()).filter(|i| !i.is_empty()))).unwrap_or((l, None));
+            let name = name.trim();
+            (!name.is_empty()).then(|| Phone { name: name.to_string(), id })
+        })
+        .collect()
 }
 
 pub fn phones(home: &Path) -> Vec<String> {
-    fs::read_to_string(home.join(LAST_PHONE)).unwrap_or_default().lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
+    phone_list(home).into_iter().map(|p| p.name).collect()
 }
 
 /// The phone that connected last ("Galaxy S20+").

@@ -94,7 +94,7 @@ final class Transfer {
         if (!hasOptions && hasFile && Store.flag(c, Store.DELETE_AFTER_PASTE)) {
             toSend.add(0, Proto.options(Proto.OPT_DELETE_AFTER_PASTE));
         }
-        toSend.add(0, Proto.device(deviceName(c)));
+        toSend.add(0, Proto.device(deviceName(c), Store.phoneId(c)));
         // Each PC learns the others (with a key just for that pair), so they can send to each other.
         if (all.size() > 1) toSend.add(1, Proto.introductions(all));
         // A PC older than these records refuses them and hangs up mid-send (the phone sees "broken

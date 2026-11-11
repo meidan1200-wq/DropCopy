@@ -59,7 +59,7 @@ final class Receiver {
             List<Proto.Pc> all = Store.pcs(c);
             Proto.Item intro = all.size() > 1 ? Proto.introductions(all) : null;
             int n = Proto.fetch(Collections.singletonList(pc), Proto.broadcastAddresses(), Transfer.routes(c),
-                    Transfer.deviceName(c), intro, saver);
+                    Transfer.deviceName(c), Store.phoneId(c), intro, saver);
             Store.remember(c, pc);
             if (n > 0) saver.announce(pc.name);
             return n;

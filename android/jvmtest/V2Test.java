@@ -75,7 +75,7 @@ public class V2Test {
             check("no answers: no pick (falls back to the race)", Proto.choose(pcs, new ArrayList<>()) == null);
 
             // 2. A check-in tells the phone the PC speaks v2; with both, it introduces them.
-            List<Proto.Item> hello = List.of(Proto.device("JVM Phone"), Proto.introductions(pcs));
+            List<Proto.Item> hello = List.of(Proto.device("JVM Phone", "a1b2c3"), Proto.introductions(pcs));
             Proto.Result r = Proto.send(List.of(d), List.of(), hello, null);
             check("OK carries the v2 flag", (r.flags & Proto.OK_V2) != 0 && d.v2);
             check("an answer to the question marks it v2 too", d.v2);
@@ -99,12 +99,12 @@ public class V2Test {
             Process share = new ProcessBuilder(exe, "--home", deskHome.toString(), "share", "--to", "JVM Phone", photo.toString(), "--text", "and a link")
                     .redirectErrorStream(true).start();
             Thread.sleep(700);
-            Proto.Result r2 = Proto.send(List.of(d), List.of(), List.of(Proto.device("JVM Phone")), null);
+            Proto.Result r2 = Proto.send(List.of(d), List.of(), List.of(Proto.device("JVM Phone", "a1b2c3")), null);
             check("a check-in says something is waiting", (r2.flags & Proto.OK_WAITING) != 0);
             ByteArrayOutputStream got = new ByteArrayOutputStream();
             String[] meta = new String[2];
             List<String> texts = new ArrayList<>();
-            int n = Proto.fetch(List.of(d), List.of(), List.of(Proto.DEFAULT_ROUTE), "JVM Phone", null, new Proto.Sink() {
+            int n = Proto.fetch(List.of(d), List.of(), List.of(Proto.DEFAULT_ROUTE), "JVM Phone", "a1b2c3", null, new Proto.Sink() {
                 public OutputStream begin(String name, String mime, long size) { meta[0] = name; meta[1] = mime; return got; }
                 public void end() { }
                 public void abort() { }
@@ -115,8 +115,27 @@ public class V2Test {
             check("fetched the photo and the text (" + n + " items)", n == 2 && java.util.Arrays.equals(got.toByteArray(), data)
                     && "photo.jpg".equals(meta[0]) && "image/jpeg".equals(meta[1]) && texts.equals(List.of("and a link")));
             check("the PC side reports it delivered: " + shareOut.replace('\n', ' '), shareOut.contains("Sent to JVM Phone"));
-            Proto.Result r3 = Proto.send(List.of(d), List.of(), List.of(Proto.device("JVM Phone")), null);
+            Proto.Result r3 = Proto.send(List.of(d), List.of(), List.of(Proto.device("JVM Phone", "a1b2c3")), null);
             check("nothing waiting afterwards", (r3.flags & Proto.OK_WAITING) == 0);
+
+            // 5. Another phone with the same name never collects what was sent to this one.
+            String phones = Files.readString(deskHome.resolve("last-phone.txt"));
+            check("the desk knows the phone by its id: " + phones.replace('\n', '|').replace('\t', ' '), phones.contains("JVM Phone\ta1b2c3"));
+            Process share2 = new ProcessBuilder(exe, "--home", deskHome.toString(), "share", "--to", "JVM Phone", "--text", "only for a1b2c3")
+                    .redirectErrorStream(true).start();
+            Thread.sleep(700);
+            List<String> twin = new ArrayList<>();
+            Proto.Sink texts2 = new Proto.Sink() {
+                public OutputStream begin(String name, String mime, long size) { return new ByteArrayOutputStream(); }
+                public void end() { }
+                public void abort() { }
+                public void text(String t) { twin.add(t); }
+            };
+            Proto.fetch(List.of(d), List.of(), List.of(Proto.DEFAULT_ROUTE), "JVM Phone", "ffff0000", null, texts2);
+            check("the same-named phone gets nothing", twin.isEmpty());
+            Proto.fetch(List.of(d), List.of(), List.of(Proto.DEFAULT_ROUTE), "JVM Phone", "a1b2c3", null, texts2);
+            check("the right phone gets it", twin.equals(List.of("only for a1b2c3")));
+            share2.waitFor(20, TimeUnit.SECONDS);
         } finally {
             desk.destroy();
             lap.destroy();

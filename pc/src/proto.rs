@@ -65,6 +65,7 @@ pub const T_OPTS: u8 = 0x06; // flags u8, before any file: how to treat this tra
 pub const T_DEVICE: u8 = 0x07; // utf-8, at most 64 bytes: the phone's own name ("Galaxy S20+")
 pub const T_FETCH: u8 = 0x08; // (v2) after END, send me what is waiting for me
 pub const T_PEERS: u8 = 0x09; // (v2) other PCs this phone is paired with: (len u16 | peer link)*
+pub const T_PHONE: u8 = 0x0A; // (v2) the phone's install id (ASCII hex), which tells apart phones of the same name
 /// `T_OPTS` flags.
 pub const OPT_NEARBY: u8 = 0x01; // a proximity preview: temporary, shown on the taskbar phone only
 pub const OPT_DELETE_AFTER_PASTE: u8 = 0x02; // remove the file once pasted (or the clipboard moves on)

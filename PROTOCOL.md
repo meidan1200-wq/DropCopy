@@ -155,6 +155,7 @@ and sends `DEVICE` (its name), the items and `END`, exactly like a phone.
 |---|---|---|
 | 0x08 | FETCH | — (phone → PC) after END, send me what waits for me |
 | 0x09 | PEERS | (len u16 \| peer link)* (phone → PC) |
+| 0x0A | PHONE | the phone's install id, ASCII hex (phone → PC, only to a PC that said v2). Something sent to a phone that gave an id goes to that id only, so two phones with the same name never get each other's things |
 | 0x10 | OK | count u16 \| flags u8 (v2: 0x01 something waits for you, 0x80 v2) |
 
 ### Local notification (same machine only)

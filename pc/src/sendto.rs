@@ -10,15 +10,16 @@ use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug)]
 pub enum Target {
-    /// A phone, by the name it gave ("Galaxy S20+").
-    Phone(String),
+    /// A phone, and how the menu names it: the name it gave ("Galaxy S20+"), with " (2)" for a
+    /// second phone of that name.
+    Phone { phone: crate::config::Phone, label: String },
     Pc(Peer),
 }
 
 impl Target {
     pub fn name(&self) -> &str {
         match self {
-            Target::Phone(n) => n,
+            Target::Phone { label, .. } => label,
             Target::Pc(p) => &p.name,
         }
     }
@@ -26,7 +27,13 @@ impl Target {
 
 /// Phones that have connected (most recent first), then the PCs phones introduced.
 pub fn targets(cfg: &Config) -> Vec<Target> {
-    let mut t: Vec<Target> = crate::config::phones(&cfg.home).into_iter().map(Target::Phone).collect();
+    let mut t: Vec<Target> = vec![];
+    for phone in crate::config::phone_list(&cfg.home) {
+        // Two phones that keep their model's name: tell them apart in the menu.
+        let same = t.iter().filter(|o| matches!(o, Target::Phone { phone: o, .. } if o.name == phone.name)).count();
+        let label = if same == 0 { phone.name.clone() } else { format!("{} ({})", phone.name, same + 1) };
+        t.push(Target::Phone { phone, label });
+    }
     t.extend(crate::peers::load(&cfg.home).into_iter().map(Target::Pc));
     t
 }
@@ -99,8 +106,8 @@ pub fn deliver(cfg: &Config, to: &Target, what: What) -> Outcome {
                 Err(e) => Outcome { title: format!("Couldn't send to {}", peer.name), text: e.to_string(), ok: false },
             }
         }
-        Target::Phone(name) => {
-            let id = match crate::outbox::queue(&cfg.home, Some(name), &what.files, &what.owned, what.text.as_deref()) {
+        Target::Phone { phone, label: name } => {
+            let id = match crate::outbox::queue(&cfg.home, Some(phone), &what.files, &what.owned, what.text.as_deref()) {
                 Ok(id) => id,
                 Err(e) => return Outcome { title: format!("Couldn't send to {name}"), text: e.to_string(), ok: false },
             };
@@ -199,7 +206,7 @@ mod imp {
                 .enumerate()
                 .map(|(i, t)| {
                     let (icon, kind) = match t {
-                        Target::Phone(_) => (Icon::Phone, "Phone"),
+                        Target::Phone { .. } => (Icon::Phone, "Phone"),
                         Target::Pc(_) => (Icon::Laptop, "PC"),
                     };
                     Item { id: i + 1, icon, label: t.name().to_string(), detail: kind.into(), enabled: true, separator: false }

@@ -51,6 +51,8 @@ public final class Proto {
     static final byte T_OPTS = 0x06, T_DEVICE = 0x07;
     /** v2: "after END, send me what is waiting for me", and "these are my other PCs". */
     static final byte T_FETCH = 0x08, T_PEERS = 0x09;
+    /** v2: this phone's install id, so two phones with the same name don't get each other's things. */
+    static final byte T_PHONE = 0x0A;
     /** v2 flags after the count in OK, and in the status answer. */
     public static final int OK_WAITING = 0x01, OK_V2 = 0x80, STATUS_CLOSE = 0x0100;
     /** {@link #options} flags: a proximity preview (temporary), and "delete from the PC after pasting". */
@@ -146,6 +148,8 @@ public final class Proto {
         default int options() { return -1; }
         /** This phone's name, for a device item; else null. */
         default String device() { return null; }
+        /** This phone's install id, for a device item (v2 PCs only); else null. */
+        default String phoneId() { return null; }
         /** For an introductions item: the T_PEERS body for the PC that answered, or null. */
         default byte[] introFor(Pc to) { return null; }
         /** Not a file: options, the device name, text, or introductions. */
@@ -317,12 +321,18 @@ public final class Proto {
 
     /** Tells the PC this phone's name ("Galaxy S20+"), shown when it connects. */
     public static Item device(final String name) {
+        return device(name, null);
+    }
+
+    /** The name, and the id that tells this phone apart from another of the same name. */
+    public static Item device(final String name, final String id) {
         return new Item() {
             public String name() { return "device"; }
             public String mime() { return ""; }
             public long size() { return 0; }
             public InputStream open() { throw new UnsupportedOperationException(); }
             public String device() { return name; }
+            public String phoneId() { return id; }
         };
     }
 
@@ -818,6 +828,8 @@ public final class Proto {
                 }
                 if (it.device() != null) {
                     tx.write(out, T_DEVICE, utf8Upto64(it.device()));
+                    // An older PC refuses records it doesn't know: only to one that said it speaks v2.
+                    if (c.pc.v2 && it.phoneId() != null) tx.write(out, T_PHONE, it.phoneId().getBytes(StandardCharsets.US_ASCII));
                     continue;
                 }
                 if (it.introFor(null) != null) {
@@ -874,7 +886,7 @@ public final class Proto {
      * everything arrived, so an interrupted fetch leaves it waiting on the PC for next time.
      * Returns how many items arrived.
      */
-    public static int fetch(List<Pc> pcs, List<InetAddress> broadcasts, List<Route> routes, String device, Item intro, Sink sink) throws IOException {
+    public static int fetch(List<Pc> pcs, List<InetAddress> broadcasts, List<Route> routes, String device, String phoneId, Item intro, Sink sink) throws IOException {
         Conn c = connect(pcs, broadcasts, routes, 4000);
         c.pc.host = c.host;
         c.pc.port = c.port;
@@ -898,6 +910,7 @@ public final class Proto {
             Records tx = new Records(hmac(c.pc.key, L_C2S, cn, sn));
             Records rx = new Records(hmac(c.pc.key, L_S2C, cn, sn));
             if (device != null) tx.write(out, T_DEVICE, utf8Upto64(device));
+            if (phoneId != null) tx.write(out, T_PHONE, phoneId.getBytes(StandardCharsets.US_ASCII));
             if (intro != null) {
                 byte[] body = intro.introFor(c.pc);
                 if (body != null && body.length > 0) tx.write(out, T_PEERS, body);

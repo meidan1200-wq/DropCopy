@@ -35,6 +35,8 @@ pub struct Received {
     pub delete_after_paste: bool,
     /// The phone's name, if it said (v0.5+); for another PC, its name.
     pub device: Option<String>,
+    /// The phone's own id (v2), which stays the same while the app is installed.
+    pub phone_id: Option<String>,
     /// Another PC (introduced by a phone) sent this, not a phone: its id.
     pub peer: Option<[u8; 8]>,
     /// The phone asked for what is waiting for it (v2).
@@ -120,7 +122,7 @@ impl Server {
                             cfg.mark_paired();
                             crate::near::heard_from_phone();
                             if let Some(d) = &r.device {
-                                crate::config::remember_phone(&cfg.home, d);
+                                crate::config::remember_phone(&cfg.home, d, r.phone_id.as_deref());
                             }
                             crate::popup::hide_code();
                         }
@@ -173,7 +175,7 @@ pub fn status_for(cfg: &Config, port: u16, phone: bool) -> Status {
     if phone && dbm != i16::MIN && dbm >= near.threshold {
         flags |= STATUS_CLOSE;
     }
-    if phone && crate::outbox::waiting(&cfg.home, None) {
+    if phone && crate::outbox::waiting(&cfg.home, None, None) {
         flags |= OK_WAITING as u16;
     }
     let idle = crate::util::idle_seconds().map(|s| s.min(u16::MAX as u64 - 1) as u16).unwrap_or(u16::MAX);
@@ -201,7 +203,7 @@ fn discovery_loop(sock: UdpSocket, cfg: &Config, port: u16, pairing: bool) {
                 crate::outbox::save_phone_at(&cfg.home, from);
             }
             // The phone is listening: if something waits for it, ask it to come and get it now.
-            if last_knock.is_none_or(|t| t.elapsed() > KNOCK_GAP) && crate::outbox::waiting(&cfg.home, None) {
+            if last_knock.is_none_or(|t| t.elapsed() > KNOCK_GAP) && crate::outbox::waiting(&cfg.home, None, None) {
                 last_knock = Some(Instant::now());
                 let pkt = offer_packet(&cfg.id, &cfg.key, &random());
                 let _ = sock.send_to(&pkt, from);
@@ -300,6 +302,7 @@ pub fn handle(stream: TcpStream, cfg: &Config) -> io::Result<Received> {
                 // Another PC: it is named by what the phone told us, else by what it says.
                 got.device = crate::peers::name_of(&cfg.home, p).or(got.device.take()).map(|d| format!("{d} (PC)"));
                 got.fetch = false;
+                got.phone_id = None;
                 got.peers.clear();
             }
             if !got.peers.is_empty() {
@@ -308,7 +311,7 @@ pub fn handle(stream: TcpStream, cfg: &Config) -> io::Result<Received> {
             let count = (got.files.len() + got.texts.len()).min(u16::MAX as usize) as u16;
             if got.fetch {
                 let mut w = io::BufWriter::with_capacity(CHUNK + 64, w);
-                let entries = crate::outbox::pending(&cfg.home, got.device.as_deref());
+                let entries = crate::outbox::pending(&cfg.home, got.device.as_deref(), got.phone_id.as_deref());
                 let mut items = vec![];
                 for e in &entries {
                     items.extend(e.files.iter().cloned().map(crate::client::Item::File));
@@ -325,7 +328,7 @@ pub fn handle(stream: TcpStream, cfg: &Config) -> io::Result<Received> {
                     }
                 }
             } else {
-                let waiting = peer.is_none() && crate::outbox::waiting(&cfg.home, got.device.as_deref());
+                let waiting = peer.is_none() && crate::outbox::waiting(&cfg.home, got.device.as_deref(), got.phone_id.as_deref());
                 let flags = OK_V2 | if waiting { OK_WAITING } else { 0 };
                 tx.write(&mut w, T_OK, &[&count.to_be_bytes()[..], &[flags]].concat(), &mut buf)?;
                 w.flush()?;
@@ -392,6 +395,10 @@ fn receive(
                 got.device = Some(name.trim().to_string()).filter(|n| !n.is_empty());
             }
             T_FETCH => got.fetch = true,
+            T_PHONE => {
+                let id: String = String::from_utf8_lossy(body).chars().filter(char::is_ascii_alphanumeric).take(32).collect();
+                got.phone_id = Some(id).filter(|i| !i.is_empty());
+            }
             T_PEERS => got.peers = crate::peers::parse_list(body),
             T_OPTS => {
                 let flags = body.first().copied().unwrap_or(0);

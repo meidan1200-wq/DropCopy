@@ -3,7 +3,8 @@
 //! phone fetches it: at once when it is listening (the PC knocks with an offer packet), otherwise
 //! the next time it talks to the PC. Each send is one folder:
 //!
-//!   outbox\<created ms>-<random>\to.txt     the phone's name ("Galaxy S20+"), empty for any phone
+//!   outbox\<created ms>-<random>\to.txt     the phone's name ("Galaxy S20+"), empty for any phone;
+//!                                           a second line with its id, when it has one
 //!                                paths.txt  files to send, by their full path (not copied)
 //!                                text.txt   text for the phone's clipboard
 //!                                files\     files that live only here (a clipboard picture)
@@ -22,6 +23,8 @@ const KEEP: Duration = Duration::from_secs(7 * 24 * 3600);
 pub struct Entry {
     pub id: String,
     pub to: Option<String>,
+    /// The phone's id: when set, only that phone gets it, whatever the others are called.
+    pub to_id: Option<String>,
     pub files: Vec<PathBuf>,
     pub texts: Vec<String>,
 }
@@ -35,7 +38,7 @@ fn now_ms() -> u128 {
 }
 
 /// Queues files (sent from where they are), files to move in (temporary ones), and text.
-pub fn queue(home: &Path, to: Option<&str>, files: &[PathBuf], owned: &[PathBuf], text: Option<&str>) -> io::Result<String> {
+pub fn queue(home: &Path, to: Option<&crate::config::Phone>, files: &[PathBuf], owned: &[PathBuf], text: Option<&str>) -> io::Result<String> {
     // Sorts in the order things were sent, also within one millisecond.
     static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst) % 1_000_000;
@@ -43,7 +46,8 @@ pub fn queue(home: &Path, to: Option<&str>, files: &[PathBuf], owned: &[PathBuf]
     let dir = root(home).join(&id);
     let tmp = root(home).join(format!(".{id}"));
     fs::create_dir_all(tmp.join("files"))?;
-    fs::write(tmp.join("to.txt"), to.unwrap_or(""))?;
+    let to = to.map(|p| format!("{}\n{}", p.name, p.id.as_deref().unwrap_or(""))).unwrap_or_default();
+    fs::write(tmp.join("to.txt"), to)?;
     let paths: Vec<String> = files.iter().map(|p| std::path::absolute(p).unwrap_or(p.clone()).display().to_string()).collect();
     fs::write(tmp.join("paths.txt"), paths.join("\n"))?;
     if let Some(t) = text {
@@ -67,7 +71,10 @@ fn read(dir: &Path) -> Option<Entry> {
     if id.starts_with('.') {
         return None;
     }
-    let to = fs::read_to_string(dir.join("to.txt")).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let to_txt = fs::read_to_string(dir.join("to.txt")).unwrap_or_default();
+    let mut lines = to_txt.lines().map(|l| Some(l.trim().to_string()).filter(|l| !l.is_empty()));
+    let to = lines.next().flatten();
+    let to_id = lines.next().flatten();
     let mut files: Vec<PathBuf> = fs::read_to_string(dir.join("paths.txt"))
         .unwrap_or_default()
         .lines()
@@ -80,14 +87,17 @@ fn read(dir: &Path) -> Option<Entry> {
         files.extend(own);
     }
     let texts = fs::read_to_string(dir.join("text.txt")).ok().into_iter().filter(|t| !t.is_empty()).collect();
-    Some(Entry { id, to, files, texts })
+    Some(Entry { id, to, to_id, files, texts })
 }
 
 fn created(id: &str) -> Option<u128> {
     id.split('-').next()?.parse().ok()
 }
 
-fn for_device(e: &Entry, device: Option<&str>) -> bool {
+fn for_device(e: &Entry, device: Option<&str>, phone_id: Option<&str>) -> bool {
+    if let Some(want) = &e.to_id {
+        return phone_id == Some(want.as_str());
+    }
     match (&e.to, device) {
         (None, _) => true,
         (Some(t), Some(d)) => t.eq_ignore_ascii_case(d),
@@ -95,9 +105,9 @@ fn for_device(e: &Entry, device: Option<&str>) -> bool {
     }
 }
 
-/// Everything waiting for this phone (by the name it gives), oldest first. Drops expired entries
+/// Everything waiting for this phone (by its id, else the name it gives), oldest first. Drops expired entries
 /// and ones whose files are all gone.
-pub fn pending(home: &Path, device: Option<&str>) -> Vec<Entry> {
+pub fn pending(home: &Path, device: Option<&str>, phone_id: Option<&str>) -> Vec<Entry> {
     let Ok(rd) = fs::read_dir(root(home)) else { return vec![] };
     let mut out = vec![];
     let now = now_ms();
@@ -108,7 +118,7 @@ pub fn pending(home: &Path, device: Option<&str>) -> Vec<Entry> {
             let _ = fs::remove_dir_all(&d);
             continue;
         }
-        if for_device(&e, device) {
+        if for_device(&e, device, phone_id) {
             out.push(e);
         }
     }
@@ -117,9 +127,9 @@ pub fn pending(home: &Path, device: Option<&str>) -> Vec<Entry> {
 }
 
 /// True if a phone of that name (or any phone, `None`) has something waiting.
-pub fn waiting(home: &Path, device: Option<&str>) -> bool {
-    match device {
-        Some(_) => !pending(home, device).is_empty(),
+pub fn waiting(home: &Path, device: Option<&str>, phone_id: Option<&str>) -> bool {
+    match device.or(phone_id) {
+        Some(_) => !pending(home, device, phone_id).is_empty(),
         None => fs::read_dir(root(home)).map(|rd| rd.filter_map(|e| e.ok()).any(|e| !e.file_name().to_string_lossy().starts_with('.'))).unwrap_or(false),
     }
 }
@@ -180,25 +190,26 @@ mod tests {
         fs::write(&f, b"jpeg").unwrap();
         let clip = h.join("clipboard.png");
         fs::write(&clip, b"png").unwrap();
-        let a = queue(&h, Some("Galaxy S20+"), &[f.clone()], &[clip.clone()], None).unwrap();
+        let s20 = crate::config::Phone { name: "Galaxy S20+".into(), id: None };
+        let a = queue(&h, Some(&s20), &[f.clone()], &[clip.clone()], None).unwrap();
         let b = queue(&h, None, &[], &[], Some("a link")).unwrap();
         assert!(!clip.exists(), "moved into the outbox");
         assert!(f.exists(), "a file you send stays where it is");
 
-        let mine = pending(&h, Some("galaxy s20+"));
+        let mine = pending(&h, Some("galaxy s20+"), None);
         assert_eq!(mine.len(), 2);
         assert_eq!(mine[0].id, a);
         assert_eq!(mine[0].files.len(), 2);
         assert_eq!(fs::read(&mine[0].files[1]).unwrap(), b"png");
         assert_eq!(mine[1].texts, vec!["a link".to_string()]);
-        assert_eq!(pending(&h, Some("Pixel 9")).len(), 1, "only the one for any phone");
-        assert!(waiting(&h, None));
+        assert_eq!(pending(&h, Some("Pixel 9"), None).len(), 1, "only the one for any phone");
+        assert!(waiting(&h, None, None));
 
         delivered(&h, &[a.clone(), "../x".into()]);
         assert!(!is_queued(&h, &a));
         assert!(is_queued(&h, &b));
         delivered(&h, &[b]);
-        assert!(!waiting(&h, None));
+        assert!(!waiting(&h, None, None));
     }
 
     #[test]
@@ -208,7 +219,18 @@ mod tests {
         fs::write(&f, b"x").unwrap();
         let id = queue(&h, None, &[f.clone()], &[], None).unwrap();
         fs::remove_file(&f).unwrap();
-        assert!(pending(&h, None).is_empty());
+        assert!(pending(&h, None, None).is_empty());
         assert!(!is_queued(&h, &id));
+    }
+
+    #[test]
+    fn two_phones_of_the_same_name_get_only_their_own() {
+        let h = home("twins");
+        let mine = crate::config::Phone { name: "Galaxy S20+".into(), id: Some("a1".into()) };
+        let id = queue(&h, Some(&mine), &[], &[], Some("for a1")).unwrap();
+        assert!(pending(&h, Some("Galaxy S20+"), Some("b2")).is_empty(), "same name, other phone");
+        assert!(pending(&h, Some("Galaxy S20+"), None).is_empty(), "a phone that gives no id");
+        assert!(!waiting(&h, Some("Galaxy S20+"), Some("b2")));
+        assert_eq!(pending(&h, Some("Renamed"), Some("a1"))[0].id, id, "the id wins over the name");
     }
 }

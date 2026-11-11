@@ -243,7 +243,7 @@ mod imp {
             .iter()
             .enumerate()
             .map(|(i, t)| {
-                let icon = if matches!(t, crate::sendto::Target::Phone(_)) { Icon::Phone } else { Icon::Laptop };
+                let icon = if matches!(t, crate::sendto::Target::Phone { .. }) { Icon::Phone } else { Icon::Laptop };
                 it(ID_SEND + i, icon, &format!("Send clipboard to {}", t.name()), String::new(), true, false)
             })
             .collect();

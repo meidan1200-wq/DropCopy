@@ -64,8 +64,9 @@ fn phone_fetches_what_the_pc_queued_once_it_confirms() {
     let photo = dir.join("photo.jpg");
     let data: Vec<u8> = (0..1_300_000u32).map(|i| (i * 7 % 251) as u8).collect();
     std::fs::write(&photo, &data).unwrap();
-    dropcopy::outbox::queue(&cfg.home, Some("Galaxy S20+"), &[photo.clone()], &[], None).unwrap();
-    dropcopy::outbox::queue(&cfg.home, Some("Pixel 9"), &[], &[], Some("for the other phone")).unwrap();
+    let to = |name: &str, id: Option<&str>| dropcopy::config::Phone { name: name.into(), id: id.map(Into::into) };
+    dropcopy::outbox::queue(&cfg.home, Some(&to("Galaxy S20+", None)), &[photo.clone()], &[], None).unwrap();
+    dropcopy::outbox::queue(&cfg.home, Some(&to("Pixel 9", None)), &[], &[], Some("for the other phone")).unwrap();
 
     // A plain check-in learns something is waiting (and that the PC speaks v2).
     let device = (T_DEVICE, b"Galaxy S20+".to_vec());
@@ -76,7 +77,7 @@ fn phone_fetches_what_the_pc_queued_once_it_confirms() {
     let (items, _) = phone(addr, &cfg.key, &[device.clone(), (T_FETCH, vec![])], false);
     assert_eq!(items.iter().filter(|(t, _)| *t == T_DATA).map(|(_, b)| b.len()).sum::<usize>(), data.len());
     std::thread::sleep(std::time::Duration::from_millis(200));
-    assert_eq!(dropcopy::outbox::pending(&cfg.home, Some("Galaxy S20+")).len(), 1);
+    assert_eq!(dropcopy::outbox::pending(&cfg.home, Some("Galaxy S20+"), None).len(), 1);
 
     // Confirmed: delivered and gone; the other phone's item stays.
     let (items, _) = phone(addr, &cfg.key, &[device.clone(), (T_FETCH, vec![])], true);
@@ -86,11 +87,24 @@ fn phone_fetches_what_the_pc_queued_once_it_confirms() {
     assert_eq!(body, data);
     assert_eq!(items.last().unwrap().0, T_FILE_END);
     std::thread::sleep(std::time::Duration::from_millis(200));
-    assert!(dropcopy::outbox::pending(&cfg.home, Some("Galaxy S20+")).len() == 0);
-    let (_, ok) = phone(addr, &cfg.key, &[device], false);
+    assert!(dropcopy::outbox::pending(&cfg.home, Some("Galaxy S20+"), None).len() == 0);
+    let (_, ok) = phone(addr, &cfg.key, &[device.clone()], false);
     assert_eq!(ok[2] & OK_WAITING, 0);
     let (items, _) = phone(addr, &cfg.key, &[(T_DEVICE, b"Pixel 9".to_vec()), (T_FETCH, vec![])], true);
     assert_eq!(items, vec![(T_TEXT, b"for the other phone".to_vec())]);
+
+    // Two phones called the same: what was sent to one (by its id) never goes to the other.
+    dropcopy::outbox::queue(&cfg.home, Some(&to("Galaxy S20+", Some("a1"))), &[], &[], Some("for a1")).unwrap();
+    let twin = [device.clone(), (T_PHONE, b"b2".to_vec())];
+    let (_, ok) = phone(addr, &cfg.key, &twin, false);
+    assert_eq!(ok[2] & OK_WAITING, 0, "nothing waits for the other phone");
+    let (items, _) = phone(addr, &cfg.key, &[twin[0].clone(), twin[1].clone(), (T_FETCH, vec![])], true);
+    assert!(items.is_empty());
+    let (items, _) = phone(addr, &cfg.key, &[device.clone(), (T_PHONE, b"a1".to_vec()), (T_FETCH, vec![])], true);
+    assert_eq!(items, vec![(T_TEXT, b"for a1".to_vec())]);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    let phones = dropcopy::config::phone_list(&cfg.home);
+    assert_eq!(phones.iter().filter(|p| p.name == "Galaxy S20+").count(), 2, "both remembered: {phones:?}");
 }
 
 #[test]
