@@ -66,7 +66,7 @@ public class WatchService extends Service {
 
     /** Starts or stops the background service to match the settings. */
     static void sync(Context c) {
-        boolean want = (wantsMedia(c) || wantsNear(c) || wantsReceive(c)) && !Store.pcs(c).isEmpty();
+        boolean want = ((wantsMedia(c) || wantsNear(c) || wantsReceive(c)) && !Store.pcs(c).isEmpty()) || !Store.phones(c).isEmpty();
         Intent i = new Intent(c, WatchService.class);
         if (want) {
             try { c.startForegroundService(i); } catch (RuntimeException ignored) { }
@@ -84,7 +84,8 @@ public class WatchService extends Service {
         java.util.List<String> parts = new java.util.ArrayList<>();
         if (media) parts.add("Sending new screenshots");
         if (near) parts.add("Seen by your PC when near");
-        if (receive) parts.add("Ready to receive from your PCs");
+        boolean fromPcs = receive && !Store.pcs(this).isEmpty(), fromPhones = !Store.phones(this).isEmpty();
+        if (fromPcs || fromPhones) parts.add("Ready to receive from your " + (fromPcs && fromPhones ? "PCs and phones" : fromPcs ? "PCs" : "phones"));
         String what = parts.isEmpty() ? "DropCopy" : String.join(" · ", parts);
         // Battery saving would stop this once the app is closed: say so where it shows, and the
         // tap leads straight to the card with the Allow button.
@@ -242,9 +243,13 @@ public class WatchService extends Service {
 
     /** The PC link (hellos, pulls, offers) runs while the screen is on and a feature needs it. */
     private void updateLink() {
-        if (receive) watchScreen();
+        boolean phones = !Store.phones(this).isEmpty();
+        if (receive || phones) watchScreen();
         PowerManager pm = getSystemService(PowerManager.class);
-        boolean on = pm != null && pm.isInteractive() && (receive || advertising);
+        boolean interactive = pm != null && pm.isInteractive();
+        // Other phones can send to this one while its screen is on.
+        if (interactive && phones) PhoneServer.hold(this, "watch"); else PhoneServer.release("watch");
+        boolean on = interactive && !Store.pcs(this).isEmpty() && (receive || advertising);
         if (on) {
             if (link == null) link = new NearLink(this);
             link.start();
@@ -293,6 +298,7 @@ public class WatchService extends Service {
         stopNearWatch();
         receive = false;
         if (link != null) link.stop();
+        PhoneServer.release("watch");
         if (nearEvents != null) {
             unregisterReceiver(nearEvents);
             nearEvents = null;

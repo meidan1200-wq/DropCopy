@@ -66,6 +66,25 @@ final class Transfer {
         return send(c, items, pcHex, progress);
     }
 
+    /**
+     * Sends to another phone ({@code hex}). It also tells that phone how to reach this one, so it
+     * can send back and always has this phone's latest address.
+     */
+    static String sendToPhone(Context c, List<Proto.Item> items, String hex, Proto.Progress progress) throws IOException {
+        Proto.Pc phone = null;
+        for (Proto.Pc p : Store.phones(c)) if (p.hexId().equals(hex)) phone = p;
+        if (phone == null) throw new IOException("That phone isn't paired any more");
+        List<Proto.Item> all = new ArrayList<>();
+        all.add(Proto.device(deviceName(c), Store.phoneId(c)));
+        all.add(Proto.pairBack(Store.me(c).toLink()));
+        all.addAll(items);
+        Proto.Result r = Proto.send(java.util.Collections.singletonList(phone), Proto.broadcastAddresses(), routes(c), all, progress);
+        Store.rememberPhone(c, r.pc);
+        if (items.isEmpty()) return "Paired with " + r.pc.name;
+        String what = items.size() == 1 ? (items.get(0).text() != null ? "Text" : items.get(0).name()) : items.size() + " items";
+        return what + " → " + r.pc.name;
+    }
+
     /** How long the phone waits for "is someone using you?" answers before choosing a PC. */
     static final int ASK_MS = 300;
 

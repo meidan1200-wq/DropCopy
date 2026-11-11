@@ -54,6 +54,11 @@ to the clipboard, with a notification to open it. Another PC gets it like a phon
 its clipboard. PCs find each other through the phone: once a phone paired with both has talked to each,
 they appear in each other's menus (each holds a key for that pair only, never the other's own key).
 
+**Phone to phone.** In the app, *Phones* → *Show my code* on one phone and *Scan a phone* on the other
+(same Wi-Fi). Each then has the other's icon in the share sheet's top row. A picture shared to it is pulled
+into the top of the screen and pours out of the top of the other phone's screen, then lands in Pictures/DropCopy
+with a notification. A phone receives while its screen is on.
+
 **Bring the phone close (the little phone).** Turn on *Show on PC when near* in the app. Hold the phone next
 to your laptop and it sends its newest photo; a small phone with that photo on its screen rises from the
 middle of the taskbar. Drag it into any app (chat, mail, Word, a folder) to drop it there, click to open it,

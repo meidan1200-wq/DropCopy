@@ -63,6 +63,11 @@ jobs:
           cd android/jvmtest
           javac -d out ../app/src/main/java/dev/dropcopy/Proto.java V2Test.java
           java -cp out V2Test ../../pc/target/release/dropcopy
+      - name: Phone to phone, and the warp's geometry
+        run: |
+          cd android/jvmtest
+          javac -d out-phone ../app/src/main/java/dev/dropcopy/Proto.java ../app/src/main/java/dev/dropcopy/Warp.java PhoneTest.java
+          java -cp out-phone dev.dropcopy.PhoneTest
       - run: mv android/app/build/outputs/apk/release/app-release.apk DropCopy-test.apk
       - uses: actions/upload-artifact@v4
         with:

@@ -143,7 +143,7 @@ final class Receiver {
         void announce(String from) {
             NotificationManager nm = c.getSystemService(NotificationManager.class);
             if (nm == null) return;
-            nm.createNotificationChannel(new NotificationChannel(CHANNEL, "Received from your PCs", NotificationManager.IMPORTANCE_DEFAULT));
+            nm.createNotificationChannel(new NotificationChannel(CHANNEL, "Received with DropCopy", NotificationManager.IMPORTANCE_DEFAULT));
             String title;
             String body;
             if (saved.isEmpty()) {

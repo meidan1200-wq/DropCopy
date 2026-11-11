@@ -53,6 +53,8 @@ public final class Proto {
     static final byte T_FETCH = 0x08, T_PEERS = 0x09;
     /** v2: this phone's install id, so two phones with the same name don't get each other's things. */
     static final byte T_PHONE = 0x0A;
+    /** Phone to phone: the sender's own pairing link, so the phone it scanned can send back. */
+    static final byte T_PAIR = 0x0B;
     /** v2 flags after the count in OK, and in the status answer. */
     public static final int OK_WAITING = 0x01, OK_V2 = 0x80, STATUS_CLOSE = 0x0100;
     /** {@link #options} flags: a proximity preview (temporary), and "delete from the PC after pasting". */
@@ -83,6 +85,8 @@ public final class Proto {
         public volatile int port;
         /** It answered with v2 (fetch, introductions): newer records are safe to send it. */
         public volatile boolean v2;
+        /** Another phone with DropCopy (its link says t=phone), not a PC. */
+        public boolean phone;
 
         public Pc(byte[] id, byte[] key, String name, String host, int port) {
             this.id = id;
@@ -105,6 +109,7 @@ public final class Proto {
                     .append("&n=").append(enc(name)).append("&p=").append(port);
             if (host != null && !host.isEmpty()) sb.append("&a=").append(host);
             if (v2) sb.append("&v2=1");
+            if (phone) sb.append("&t=phone");
             return sb.toString();
         }
 
@@ -131,6 +136,7 @@ public final class Proto {
             if (host != null && host.contains(",")) host = host.substring(0, host.indexOf(','));
             Pc pc = new Pc(id, key, name, host, port);
             pc.v2 = "1".equals(p.get("v2"));
+            pc.phone = "phone".equals(p.get("t"));
             return pc;
         }
     }
@@ -152,8 +158,10 @@ public final class Proto {
         default String phoneId() { return null; }
         /** For an introductions item: the T_PEERS body for the PC that answered, or null. */
         default byte[] introFor(Pc to) { return null; }
-        /** Not a file: options, the device name, text, or introductions. */
-        default boolean isRecord() { return options() >= 0 || device() != null || text() != null || introFor(null) != null; }
+        /** For a pair-back item (phone to phone): this phone's own link; else null. */
+        default String pairLink() { return null; }
+        /** Not a file: options, the device name, text, introductions, or a pair-back. */
+        default boolean isRecord() { return options() >= 0 || device() != null || text() != null || introFor(null) != null || pairLink() != null; }
     }
 
     /** The key another PC uses with {@code pc}: HMAC(pc.key, "dropcopy/v2/peer" | other id). */
@@ -333,6 +341,17 @@ public final class Proto {
             public InputStream open() { throw new UnsupportedOperationException(); }
             public String device() { return name; }
             public String phoneId() { return id; }
+        };
+    }
+
+    /** Phone to phone: "here is how to reach me", so the phone that scanned this one is known back. */
+    public static Item pairBack(final String link) {
+        return new Item() {
+            public String name() { return "pair"; }
+            public String mime() { return ""; }
+            public long size() { return 0; }
+            public InputStream open() { throw new UnsupportedOperationException(); }
+            public String pairLink() { return link; }
         };
     }
 
@@ -837,6 +856,10 @@ public final class Proto {
                     if (c.pc.v2 && body.length > 0) tx.write(out, T_PEERS, body);
                     continue;
                 }
+                if (it.pairLink() != null) {
+                    if (c.pc.phone) tx.write(out, T_PAIR, it.pairLink().getBytes(StandardCharsets.UTF_8));
+                    continue;
+                }
                 if (it.text() != null) {
                     tx.write(out, T_TEXT, it.text().getBytes(StandardCharsets.UTF_8));
                     continue;
@@ -964,6 +987,108 @@ public final class Proto {
             }
         } finally {
             if (open) sink.abort();
+        }
+    }
+
+    // ---- receiving (phone to phone) ----------------------------------------------------------
+
+    /**
+     * The answer a phone gives to discovery ("DCD1" | id | nonce) when it is the one asked for:
+     * "DCR1" | id | port u16 | HMAC(K, "dropcopy/v1/disc" | nonce | port)[..16], as a PC answers.
+     * Null for anything else.
+     */
+    static byte[] discoveryReply(byte[] pkt, byte[] id, byte[] key, int port) {
+        if (pkt.length != 28) return null;
+        for (int i = 0; i < 4; i++) if (pkt[i] != DISCOVER[i]) return null;
+        for (int i = 0; i < 8; i++) if (pkt[4 + i] != id[i]) return null;
+        byte[] p = {(byte) (port >>> 8), (byte) port};
+        return ByteBuffer.allocate(30).put(REPLY).put(id).put(p).put(hmac(key, L_DISC, slice(pkt, 12, 28), p), 0, 16).array();
+    }
+
+    /** What another phone sent. */
+    public static final class Incoming {
+        public String device;
+        /** Its own link, when it just scanned this phone's code. */
+        public String pairLink;
+        public int count;
+        public final List<String> mimes = new ArrayList<>();
+    }
+
+    /**
+     * The receiving side of a transfer, for a phone that another phone sends to: the same
+     * handshake and records as a PC (PROTOCOL.md), so the sender needs nothing new. Files go to
+     * {@code sink}; OK is sent once everything arrived.
+     */
+    public static Incoming serve(Socket s, byte[] key, Sink sink) throws IOException {
+        s.setSoTimeout(30_000);
+        DataInputStream in = new DataInputStream(new java.io.BufferedInputStream(s.getInputStream(), CHUNK + 64));
+        OutputStream out = new java.io.BufferedOutputStream(s.getOutputStream());
+        byte[] hello = new byte[20];
+        in.readFully(hello);
+        if (!MessageDigest.isEqual(slice(hello, 0, 4), MAGIC)) throw new IOException("not DropCopy");
+        byte[] cn = slice(hello, 4, 20), sn = random(16);
+        out.write(MAGIC);
+        out.write(sn);
+        out.write(hmac(key, L_SRV, cn, sn));
+        out.flush();
+        Records rx = new Records(hmac(key, L_C2S, cn, sn));
+        Records tx = new Records(hmac(key, L_S2C, cn, sn));
+        Incoming got = new Incoming();
+        OutputStream file = null;
+        try {
+            while (true) {
+                byte[] r = rx.read(in); // fails on a wrong key: nothing reaches the sink
+                switch (r[0]) {
+                    case T_FILE: {
+                        if (file != null) throw new IOException("new file before the previous one ended");
+                        ByteBuffer b = ByteBuffer.wrap(r, 1, r.length - 1);
+                        long size = b.getLong();
+                        byte[] name = new byte[b.getShort() & 0xffff];
+                        b.get(name);
+                        byte[] mime = new byte[b.getShort() & 0xffff];
+                        b.get(mime);
+                        String m = new String(mime, StandardCharsets.UTF_8);
+                        file = sink.begin(new String(name, StandardCharsets.UTF_8), m, size);
+                        got.mimes.add(m);
+                        break;
+                    }
+                    case T_DATA:
+                        if (file == null) throw new IOException("data outside a file");
+                        file.write(r, 1, r.length - 1);
+                        break;
+                    case T_FILE_END:
+                        if (file == null) throw new IOException("file end outside a file");
+                        file.close();
+                        file = null;
+                        sink.end();
+                        got.count++;
+                        break;
+                    case T_TEXT:
+                        sink.text(new String(r, 1, r.length - 1, StandardCharsets.UTF_8));
+                        got.count++;
+                        break;
+                    case T_DEVICE:
+                        got.device = new String(r, 1, Math.min(r.length - 1, 64), StandardCharsets.UTF_8).trim();
+                        break;
+                    case T_PAIR:
+                        got.pairLink = new String(r, 1, r.length - 1, StandardCharsets.UTF_8);
+                        break;
+                    case T_OPTS:
+                    case T_PHONE:
+                        break;
+                    case T_END:
+                        tx.write(out, T_OK, new byte[]{(byte) (got.count >>> 8), (byte) got.count, (byte) OK_V2});
+                        out.flush();
+                        return got;
+                    default:
+                        throw new IOException("unknown record " + r[0]);
+                }
+            }
+        } finally {
+            if (file != null) {
+                try { file.close(); } catch (IOException ignored) { }
+                sink.abort();
+            }
         }
     }
 

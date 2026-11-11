@@ -158,6 +158,20 @@ and sends `DEVICE` (its name), the items and `END`, exactly like a phone.
 | 0x0A | PHONE | the phone's install id, ASCII hex (phone → PC, only to a PC that said v2). Something sent to a phone that gave an id goes to that id only, so two phones with the same name never get each other's things |
 | 0x10 | OK | count u16 \| flags u8 (v2: 0x01 something waits for you, 0x80 v2) |
 
+### Phone to phone
+
+A phone can be a receiver too, with its own id and key made once (like a PC's). Its code is the usual
+pairing link with `&t=phone`, shown only on its own screen. While the screen is on (and a phone is paired,
+or the code is showing) it listens on TCP 48650 and answers `DCD1` discovery for its id on UDP 48651
+exactly like a PC, so the sending phone uses the same race, handshake and records. On top:
+
+| type | name | body |
+|---|---|---|
+| 0x0B | PAIR | the sender's own phone link (phone → phone only). The phone that scanned the code says hello with it, and every later send carries it again: the receiver can send back, and has the sender's latest address |
+
+The receiver ignores `OPTS` and `PHONE`, saves files like a fetch from a PC (Pictures/Movies/Download
+DropCopy), puts text on its clipboard, and answers `OK` (count, `0x80`).
+
 ### Local notification (same machine only)
 
 ```

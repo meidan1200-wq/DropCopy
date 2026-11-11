@@ -48,6 +48,8 @@ public class SendService extends Service {
     }
 
     static final String ACTION_FETCH = "dev.dropcopy.FETCH";
+    /** The target "phone:<id>" sends to that paired phone instead of a PC. */
+    static final String PHONE = "phone:";
 
     static Notification.Builder notification(Context c, String channel, String title) {
         NotificationManager nm = c.getSystemService(NotificationManager.class);
@@ -59,7 +61,7 @@ public class SendService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         boolean fetching = intent != null && ACTION_FETCH.equals(intent.getAction());
-        startForeground(1, notification(this, CHANNEL, fetching ? "Receiving from PC…" : "Sending to PC…").build());
+        startForeground(1, notification(this, CHANNEL, fetching ? "Receiving from PC…" : "Sending…").build());
         if (intent == null) {
             stopSelf(startId);
             return START_NOT_STICKY;
@@ -92,9 +94,27 @@ public class SendService extends Service {
                 long now = SystemClock.elapsedRealtime();
                 if (total <= 0 || now - last[0] < 300) return;
                 last[0] = now;
-                nm.notify(1, notification(this, CHANNEL, "Sending to PC…")
+                nm.notify(1, notification(this, CHANNEL, "Sending…")
                         .setProgress(1000, (int) (sent * 1000 / total), false).build());
             };
+            if (pc != null && pc.startsWith(PHONE)) {
+                String hex = pc.substring(PHONE.length());
+                try {
+                    java.util.List<Proto.Item> items = new ArrayList<>();
+                    if (uris != null) for (Uri u : uris) items.add(Transfer.item(this, u));
+                    if (text != null && !text.isEmpty()) items.add(Proto.text(text));
+                    Transfer.toast(this, "✓ " + Transfer.sendToPhone(this, items, hex, progress));
+                } catch (Proto.Unreachable e) {
+                    String name = "The other phone";
+                    for (Proto.Pc p : Store.phones(this)) if (p.hexId().equals(hex)) name = p.name;
+                    Transfer.toast(this, "Not sent: " + name + " isn't on this Wi-Fi, or its screen is off");
+                } catch (Exception e) {
+                    Transfer.toast(this, "Not sent: " + e.getMessage());
+                } finally {
+                    stopSelf(startId);
+                }
+                return;
+            }
             try {
                 Transfer.toast(this, "✓ " + Transfer.run(this, uris, text, pc, progress));
             } catch (Proto.Unreachable e) {

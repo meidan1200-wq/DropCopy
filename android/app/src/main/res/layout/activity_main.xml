@@ -433,6 +433,105 @@
                     android:layout_marginStart="12dp"
                     android:text="Open" />
             </LinearLayout>
+
+            <ImageView
+                android:id="@+id/row_ok_overlay_div"
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:importantForAccessibility="no"
+                android:src="@drawable/divider" />
+
+            <LinearLayout
+                android:id="@+id/row_ok_overlay"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:minHeight="72dp"
+                android:orientation="horizontal"
+                android:paddingTop="10dp"
+                android:paddingBottom="10dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/Title"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Show pictures as they arrive" />
+
+                    <TextView
+                        style="@style/Body"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:text="A picture from another phone warps onto the screen. Turn on “Display over other apps” for DropCopy." />
+                </LinearLayout>
+
+                <Button
+                    android:id="@+id/overlay_allow"
+                    style="@style/Btn.Tonal"
+                    android:layout_width="wrap_content"
+                    android:layout_marginStart="12dp"
+                    android:text="Open" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Phones -->
+        <TextView
+            style="@style/SectionLabel"
+            android:text="Phones" />
+
+        <LinearLayout style="@style/Card">
+
+            <TextView
+                android:id="@+id/phones_title"
+                style="@style/Title"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Send to another phone" />
+
+            <TextView
+                android:id="@+id/phones_detail"
+                style="@style/Body"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="Pictures warp from one phone to the other. Both need DropCopy and the same Wi-Fi." />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/phone_code"
+                    style="@style/Btn.Tonal"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:text="Show my code" />
+
+                <Button
+                    android:id="@+id/phone_scan"
+                    style="@style/Btn.Tonal"
+                    android:layout_width="0dp"
+                    android:layout_marginStart="10dp"
+                    android:layout_weight="1"
+                    android:text="Scan a phone" />
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/phones_forget"
+                style="@style/Btn.Text"
+                android:layout_width="wrap_content"
+                android:layout_marginStart="-12dp"
+                android:layout_marginTop="6dp"
+                android:text="Forget these phones"
+                android:visibility="gone" />
         </LinearLayout>
 
         <!-- Automatic -->
@@ -690,7 +789,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="2dp"
-                android:text="Or tap your PC's own icon at the top of the share sheet." />
+                android:text="Or tap your PC's own icon at the top of the share sheet. A paired phone has its own icon there too." />
 
             <TextView
                 style="@style/Title"

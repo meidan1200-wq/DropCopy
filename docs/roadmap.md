@@ -51,17 +51,18 @@ See README ("From the PC") and PROTOCOL.md ("v2"). Choices made, to confirm with
   Bluetooth; it does keep the low-priority DropCopy notification). Turn off in the app.
 - The single share icon is labelled with the PC's name (one PC) or "My PC" (several).
 
-## Next: phone to phone, with the warp animation (asked 2026-11-11)
-1. **Pairing phones.** Phone B shows a QR code in the app (its own id and key, like a PC); phone A scans
-   it. Same v1 handshake; phone B runs a small TCP receiver only while its screen is on (or a
-   foreground "Receiving" screen is open), found by the existing UDP discovery.
-2. **Share target.** The top-row icon list gains the paired phone (e.g. "Galaxy S26"), still one icon
-   per destination kind; "My PC" keeps picking among PCs.
-3. **Warp animation (picture shares between phones only).** Sender: ShareActivity stays visible
-   ~600 ms: the picture shrinks into a rounded card and is pulled into a ripple that bends toward the
-   top of the screen (RenderEffect blur + a scale/translate path on Android 12+; scale and fade on
-   10–11). Receiver: a full-screen-intent notification (Android allows it for a short, user-visible
-   event) opens a translucent activity where the picture lands out of the same ripple, then settles
-   into the notification. App colours (#237EF0), no neon or glow.
-4. **Nearby fallback, maybe.** Without shared Wi-Fi, Google's Nearby Connections (Play services) gives
-   Bluetooth/Wi-Fi Direct transport. Adds a dependency; only if same-network use isn't enough.
+## v0.6, round 2 (built 2026-11-11, being tested): phone to phone, with the warp
+- **Pairing.** Phones → *Show my code* on one phone, *Scan a phone* on the other. One scan pairs both
+  ways (the scanner's hello carries its own link). PROTOCOL.md, "Phone to phone".
+- **Receiving** runs while the screen is on, only once a phone is paired (or while the code shows).
+- **Share sheet.** Each paired phone has its own icon in the top row (up to three), next to the one
+  PC icon. With no PC paired, plain *Share → DropCopy* goes to the last phone used.
+- **The warp (pictures only).** Sender: the share sheet closes and the picture is pulled into the top
+  edge of the screen, row by row (a mesh, `Warp.java`), with a blue ring where it goes in. Receiver:
+  it pours out of the top edge over the home screen, rests, and fades into the notification. Drawn
+  over other apps, so the receiver needs *Display over other apps* (a "Needs your OK" row); without it
+  the picture only comes as a notification. Changed from the first plan: no full-screen intent, since
+  Android only opens those on a locked screen. `jvmtest/WarpPreview.java` draws the same frames on a
+  desktop.
+- Not done: a proximity check (Bluetooth RSSI between phones). Phones on the same Wi-Fi are enough to
+  send; "close" is not required. Nearby Connections (no shared Wi-Fi) is still a maybe.
