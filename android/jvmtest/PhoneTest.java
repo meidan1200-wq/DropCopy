@@ -166,19 +166,25 @@ public class PhoneTest {
 
         // 6. The warp: whole card at the start, all of it in the point at the end, rows near the point first.
         float[] v = new float[(Warp.COLS + 1) * (Warp.ROWS + 1) * 2];
-        Warp.genie(0, 100, 200, 300, 500, 200, -8, 3, v);
+        Warp.genie(0, 100, 200, 300, 500, 200, -8, 1.8f, 70, v);
         int last = v.length - 2;
         check("t=0: the card's corners", v[0] == 100 && v[1] == 200 && v[last] == 300 && v[last + 1] == 500);
-        Warp.genie(1, 100, 200, 300, 500, 200, -8, 3, v);
+        Warp.genie(1, 100, 200, 300, 500, 200, -8, 1.8f, 70, v);
         boolean in = true;
-        for (int i = 0; i < v.length; i += 2) in &= Math.abs(v[i] - 200) <= 1.6f && Math.abs(v[i + 1] + 8) < 0.01f;
-        check("t=1: everything in the point", in);
-        Warp.genie(0.4f, 100, 200, 300, 500, 200, -8, 3, v);
+        for (int i = 0; i < v.length; i += 2) in &= Math.abs(v[i] - 200) < 0.01f && Math.abs(v[i + 1] + 8) < 0.01f;
+        check("t=1: everything in the hole", in);
+        Warp.genie(0.4f, 100, 200, 300, 500, 200, -8, 1.8f, 70, v);
         check("t=0.4: the top has travelled further than the bottom", (200 - v[1]) > (500 - v[last + 1]));
-        Warp.Frame end = Warp.frame(true, Warp.SEND_MS, 1080, 2400, 4000, 3000, 2.75f, null);
-        Warp.Frame rest = Warp.frame(false, 1200, 1080, 2400, 4000, 3000, 2.75f, null);
-        check("sent: gone at the end", end.done && end.alpha < 0.01f);
-        check("received: whole and still at rest", rest.alpha > 0.99f && !rest.done);
+        // A Galaxy S20+: 1080 wide at 2.75 dp, the camera hole 33 px from the top, 16 px across.
+        Warp.Frame mid = Warp.frame(true, 600, 1080, 2400, 4000, 3000, 2.75f, 540, 33, 16, null);
+        Warp.Frame end = Warp.frame(true, Warp.SEND_MS, 1080, 2400, 4000, 3000, 2.75f, 540, 33, 16, null);
+        Warp.Frame rest = Warp.frame(false, 1500, 1080, 2400, 4000, 3000, 2.75f, 540, 33, 16, null);
+        check("sending: the camera hole opens wider", mid.holeRadius > 30 && mid.holeX == 540 && mid.holeY == 33);
+        check("sent: gone, and the hole is the camera again", end.done && end.alpha < 0.01f && Math.abs(end.holeRadius - 16) < 0.5f);
+        check("received: whole and still at rest, hole closed", rest.alpha > 0.99f && !rest.done && Math.abs(rest.holeRadius - 16) < 0.5f);
+        boolean onScreen = true;
+        for (int i = 0; i < mid.verts.length; i += 2) onScreen &= mid.verts[i] > -40 && mid.verts[i] < 1120 && mid.verts[i + 1] > -40;
+        check("the spiral stays on the screen", onScreen);
 
         System.out.println(failures == 0 ? "ALL PASSED" : failures + " FAILED");
         System.exit(failures == 0 ? 0 : 1);

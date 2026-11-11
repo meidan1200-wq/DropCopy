@@ -46,26 +46,52 @@ public class WarpPreview {
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
         g.drawImage(home, 0, 0, null);
-        Warp.Frame f = Warp.frame(sending, ms, W, H, photo.getWidth(), photo.getHeight(), 1, null);
+        Warp.Frame f = Warp.frame(sending, ms, W, H, photo.getWidth(), photo.getHeight(), 1, HOLE_X, HOLE_Y, HOLE_R, null);
         if (f.veil > 0) {
             g.setColor(new Color(0, 0, 0, Math.round(255 * 0.22f * f.veil)));
             g.fillRect(0, 0, W, H);
         }
-        if (f.ringAlpha > 0) {
-            g.setStroke(new BasicStroke(2f));
-            for (float k : new float[]{1f, 0.62f}) {
-                g.setColor(new Color(0x23 / 255f, 0x7E / 255f, 0xF0 / 255f, f.ringAlpha * k));
-                float r = f.ringRadius * k;
-                g.draw(new Ellipse2D.Float(f.ringX - r, f.ringY - r, 2 * r, 2 * r));
-            }
+        if (f.shadowAlpha > 0.01f) {
+            g.setPaint(new java.awt.RadialGradientPaint(f.holeX, f.holeY, f.shadowRadius, new float[]{0f, 1f},
+                    new Color[]{new Color(0, 0, 0, f.shadowAlpha), new Color(0, 0, 0, 0)}));
+            g.fill(new Ellipse2D.Float(f.holeX - f.shadowRadius, f.holeY - f.shadowRadius, 2 * f.shadowRadius, 2 * f.shadowRadius));
         }
         if (f.alpha > 0.01f) {
             BufferedImage card = rounded(photo, 18 * photo.getWidth() / (W * 0.72f));
+            java.awt.Composite old = g.getComposite();
             g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, f.alpha));
             mesh(g, card, f.verts);
+            g.setComposite(old);
         }
+        hole(g, f, 1);
         g.dispose();
         return out;
+    }
+
+    static final float HOLE_X = W / 2f, HOLE_Y = 14, HOLE_R = 5;
+
+    /** The camera hole, the thin ring turning around it, and the ripple: as WarpView draws them. */
+    static void hole(Graphics2D g, Warp.Frame f, float dp) {
+        float blue = 0x23 / 255f, g2 = 0x7E / 255f, b2 = 0xF0 / 255f;
+        if (f.ringAlpha > 0) {
+            g.setStroke(new BasicStroke(1.5f * dp));
+            for (float k : new float[]{1f, 0.62f}) {
+                g.setColor(new Color(blue, g2, b2, f.ringAlpha * k));
+                float r = f.holeRadius + (f.ringRadius - f.holeRadius) * k;
+                g.draw(new Ellipse2D.Float(f.holeX - r, f.holeY - r, 2 * r, 2 * r));
+            }
+        }
+        if (f.haloAlpha > 0.01f) {
+            float r = f.holeRadius * 1.6f + 2 * dp;
+            g.setStroke(new BasicStroke(1.5f * dp, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            g.setColor(new Color(blue, g2, b2, 0.3f * f.haloAlpha));
+            g.draw(new Ellipse2D.Float(f.holeX - r, f.holeY - r, 2 * r, 2 * r));
+            g.setColor(new Color(blue, g2, b2, 0.9f * f.haloAlpha));
+            g.draw(new java.awt.geom.Arc2D.Float(f.holeX - r, f.holeY - r, 2 * r, 2 * r,
+                    (float) -Math.toDegrees(f.haloSpin), 200, java.awt.geom.Arc2D.OPEN));
+        }
+        g.setColor(Color.BLACK);
+        g.fill(new Ellipse2D.Float(f.holeX - f.holeRadius, f.holeY - f.holeRadius, 2 * f.holeRadius, 2 * f.holeRadius));
     }
 
     /** drawBitmapMesh, triangle by triangle. */
@@ -148,6 +174,8 @@ public class WarpPreview {
         }
         g.setColor(new Color(255, 255, 255, 200));
         g.drawString("12:30", 18, 18);
+        g.setColor(Color.BLACK);
+        g.fill(new Ellipse2D.Float(HOLE_X - HOLE_R, HOLE_Y - HOLE_R, 2 * HOLE_R, 2 * HOLE_R));
         g.dispose();
         return p;
     }

@@ -57,9 +57,12 @@ See README ("From the PC") and PROTOCOL.md ("v2"). Choices made, to confirm with
 - **Receiving** runs while the screen is on, only once a phone is paired (or while the code shows).
 - **Share sheet.** Each paired phone has its own icon in the top row (up to three), next to the one
   PC icon. With no PC paired, plain *Share → DropCopy* goes to the last phone used.
-- **The warp (pictures only).** Sender: the share sheet closes and the picture is pulled into the top
-  edge of the screen, row by row (a mesh, `Warp.java`), with a blue ring where it goes in. Receiver:
-  it pours out of the top edge over the home screen, rests, and fades into the notification. Drawn
+- **The warp (pictures only), a black hole at the camera.** Sender: the share sheet closes, the front
+  camera's punch-hole (the display cutout) opens a little with darkness round it and a thin turning
+  ring, and the picture is pulled into it row by row, stretching and curling in faster as it falls
+  (a mesh, `Warp.java`); a ripple spreads as the hole closes. Receiver: the same out of its camera
+  hole over the home screen, then it rests and fades into the notification. Asked 2026-11-11: "like
+  sucking into a black hole ... the hole of the camera", keeping the first version's feel. Drawn
   over other apps, so the receiver needs *Display over other apps* (a "Needs your OK" row); without it
   the picture only comes as a notification. Changed from the first plan: no full-screen intent, since
   Android only opens those on a locked screen. `jvmtest/WarpPreview.java` draws the same frames on a

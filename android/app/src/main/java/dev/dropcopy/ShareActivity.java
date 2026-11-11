@@ -59,6 +59,11 @@ public class ShareActivity extends Activity {
             }
             WarpView warp = picture == null ? null : WarpView.create(this, picture, true);
             if (warp != null) {
+                // Drawn edge to edge, over the status bar and round the camera, where the hole is.
+                android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
+                lp.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                getWindow().setAttributes(lp);
+                getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS);
                 setContentView(warp);
                 warp.play(() -> {
                     finish();
