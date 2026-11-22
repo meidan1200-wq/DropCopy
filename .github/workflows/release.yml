@@ -98,3 +98,5 @@ jobs:
             **PC (Windows 10/11):** download `DropCopy-Setup.exe` and double-click it. It installs itself, starts with Windows, runs in the background with an icon in the tray, and updates itself from here on. (`dropcopy.exe` is the same file, used by the built-in updater; `dropcopy-cli.exe` is for typing `dropcopy` commands in a terminal.)
             **Phone (Android 10+):** install `DropCopy.apk`, open it and scan the QR code the PC shows. It updates itself from here on.
             Share a photo to DropCopy and press Ctrl+V on the PC. Hold the phone by your laptop to bring up your newest photo on the little phone above the taskbar, and drag it into any app.
+            **From the PC:** right-click files → *Send to* → **DropCopy** (or *Send clipboard to …* in the tray menu) and pick your phone or another PC.
+            **Phone to phone:** in the app, *Phones* → *Show my code* on one phone and *Scan a phone* on the other (same Wi-Fi). A picture you share to it falls into your camera's hole like into a black hole and comes out of the other phone's.
