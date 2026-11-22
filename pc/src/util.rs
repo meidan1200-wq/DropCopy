@@ -173,3 +173,31 @@ mod tests {
         assert_eq!(ext_for_mime("application/x-unknown"), None);
     }
 }
+
+/// Seconds since someone last touched this PC's keyboard or mouse (this signed-in session).
+/// A phone with several PCs sends to the one in use. `None` where the OS doesn't say.
+pub fn idle_seconds() -> Option<u64> {
+    // Tests set this to stand in for a PC that is (or isn't) in use.
+    if let Some(s) = std::env::var("DROPCOPY_IDLE").ok().and_then(|v| v.parse().ok()) {
+        return Some(s);
+    }
+    os_idle_seconds()
+}
+
+#[cfg(windows)]
+fn os_idle_seconds() -> Option<u64> {
+    use windows::Win32::System::SystemInformation::GetTickCount;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+    let mut li = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+    unsafe {
+        if !GetLastInputInfo(&mut li).as_bool() {
+            return None;
+        }
+        Some(GetTickCount().wrapping_sub(li.dwTime) as u64 / 1000)
+    }
+}
+
+#[cfg(not(windows))]
+fn os_idle_seconds() -> Option<u64> {
+    None
+}

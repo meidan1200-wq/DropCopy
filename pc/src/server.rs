@@ -33,8 +33,20 @@ pub struct Received {
     pub nearby: bool,
     /// Delete the files once pasted, or once something else is copied.
     pub delete_after_paste: bool,
-    /// The phone's name, if it said (v0.5+).
+    /// The phone's name, if it said (v0.5+); for another PC, its name.
     pub device: Option<String>,
+    /// The phone's own id (v2), which stays the same while the app is installed.
+    pub phone_id: Option<String>,
+    /// Another PC (introduced by a phone) sent this, not a phone: its id.
+    pub peer: Option<[u8; 8]>,
+    /// The phone asked for what is waiting for it (v2).
+    pub fetch: bool,
+    /// Items handed to the phone from the outbox.
+    pub fetched: usize,
+    /// PCs the phone introduced that are new here.
+    pub introduced: Vec<String>,
+    /// The PCs the phone introduced, before they are saved.
+    peers: Vec<crate::peers::Peer>,
 }
 
 pub struct Server {
@@ -105,13 +117,21 @@ impl Server {
                 let t0 = Instant::now();
                 match handle(stream, &cfg) {
                     Ok(r) => {
-                        // Only a phone holding the key gets this far: it is paired.
-                        cfg.mark_paired();
-                        crate::near::heard_from_phone();
-                        if let Some(d) = &r.device {
-                            crate::config::remember_phone(&cfg.home, d);
+                        if r.peer.is_none() {
+                            // Only a phone holding the key gets this far: it is paired.
+                            cfg.mark_paired();
+                            crate::near::heard_from_phone();
+                            if let Some(d) = &r.device {
+                                crate::config::remember_phone(&cfg.home, d, r.phone_id.as_deref());
+                            }
+                            crate::popup::hide_code();
                         }
-                        crate::popup::hide_code();
+                        for name in &r.introduced {
+                            say!("  + {name}: your phone introduced it - you can send to it from the tray or Explorer's Send to");
+                        }
+                        if r.fetched > 0 {
+                            say!("  -> {} item(s) delivered to {}", r.fetched, r.device.as_deref().unwrap_or("the phone"));
+                        }
                         if r.nearby {
                             // Brought close: show it on the little phone; nothing touches the clipboard.
                             crate::cleanup::track(&r.files);
@@ -131,6 +151,9 @@ impl Server {
                         if let Some(d) = &r.device {
                             peer = format!("{d} ({peer})");
                         }
+                        if r.fetch && r.files.is_empty() && r.texts.is_empty() {
+                            return; // came to collect, not to send
+                        }
                         report(&r, &peer, t0, clip, &lock)
                     }
                     // A phone races several connections and closes the ones that lose.
@@ -143,18 +166,54 @@ impl Server {
     }
 }
 
+/// What this PC answers a v2 discovery request with.
+pub fn status_for(cfg: &Config, port: u16, phone: bool) -> Status {
+    let near = crate::near::status();
+    let fresh = near.last.filter(|(_, age)| age.as_secs() < 5);
+    let dbm = fresh.map(|(s, _)| s.round() as i16).unwrap_or(i16::MIN);
+    let mut flags = OK_V2 as u16;
+    if phone && dbm != i16::MIN && dbm >= near.threshold {
+        flags |= STATUS_CLOSE;
+    }
+    if phone && crate::outbox::waiting(&cfg.home, None, None) {
+        flags |= OK_WAITING as u16;
+    }
+    let idle = crate::util::idle_seconds().map(|s| s.min(u16::MAX as u64 - 1) as u16).unwrap_or(u16::MAX);
+    Status { port, idle_s: idle, near_dbm: if phone { dbm } else { i16::MIN }, flags }
+}
+
+/// Between knocks on a listening phone that has something waiting.
+const KNOCK_GAP: Duration = Duration::from_secs(10);
+
 fn discovery_loop(sock: UdpSocket, cfg: &Config, port: u16, pairing: bool) {
-    let mut buf = [0u8; 64];
+    let mut buf = [0u8; TOAST_MAX];
     let mut last_shown: Option<Instant> = None;
+    let mut last_knock: Option<Instant> = None;
     loop {
         // Windows reports an ICMP "port unreachable" from an earlier send as a recv error.
         let Ok((n, from)) = sock.recv_from(&mut buf) else { continue };
         if n == 28 && &buf[..4] == DISCOVER_MAGIC && buf[4..12] == cfg.id {
             let _ = sock.send_to(&reply_packet(&cfg.id, &cfg.key, &buf[12..28], port), from);
+        } else if let Some((who, nonce, kf)) = parse_ask(&buf[..n], &cfg.id, &cfg.key) {
+            let phone = who == [0u8; 8];
+            let _ = sock.send_to(&status_packet(&cfg.id, &kf, &who, &nonce, &status_for(cfg, port, phone)), from);
         } else if is_hello(&buf[..n], &cfg.id, &cfg.key) {
             crate::near::phone_is_at(from);
+            if crate::near::phone() == Some(from) {
+                crate::outbox::save_phone_at(&cfg.home, from);
+            }
+            // The phone is listening: if something waits for it, ask it to come and get it now.
+            if last_knock.is_none_or(|t| t.elapsed() > KNOCK_GAP) && crate::outbox::waiting(&cfg.home, None, None) {
+                last_knock = Some(Instant::now());
+                let pkt = offer_packet(&cfg.id, &cfg.key, &random());
+                let _ = sock.send_to(&pkt, from);
+            }
         } else if n == 28 && &buf[..4] == NEAR_ASK_MAGIC && buf[4..12] == cfg.id {
             let _ = sock.send_to(&near_answer(&cfg.id, &cfg.key, &buf[12..28], &crate::near::status()), from);
+        } else if n > 4 && &buf[..4] == TOAST_MAGIC && from.ip().is_loopback() {
+            let msg = String::from_utf8_lossy(&buf[4..n]).into_owned();
+            let (title, text) = msg.split_once('\0').unwrap_or((&msg, ""));
+            crate::tray::toast(title, text);
         } else if n == 4 && &buf[..4] == STOP_MAGIC && from.ip().is_loopback() {
             say!("  stopping: a newer copy is taking over");
             std::process::exit(0);
@@ -224,7 +283,7 @@ pub fn handle(stream: TcpStream, cfg: &Config) -> io::Result<Received> {
     stream.set_read_timeout(Some(HELLO_TIMEOUT))?;
     let mut w = stream.try_clone()?;
     let mut r = BufReader::with_capacity(256 * 1024, stream);
-    let (mut rx, mut tx) = server_handshake(&mut r, &mut w, &cfg.key).map_err(|e| {
+    let (mut rx, mut tx, peer) = server_handshake_any(&mut r, &mut w, &cfg.key).map_err(|e| {
         if e.kind() == io::ErrorKind::UnexpectedEof {
             io::Error::new(io::ErrorKind::ConnectionAborted, "closed before saying hello")
         } else {
@@ -237,10 +296,43 @@ pub fn handle(stream: TcpStream, cfg: &Config) -> io::Result<Received> {
     let result = receive(&mut r, &mut rx, cfg, &mut part);
     let mut buf = Vec::new();
     match result {
-        Ok(got) => {
+        Ok(mut got) => {
+            got.peer = peer;
+            if let Some(p) = &peer {
+                // Another PC: it is named by what the phone told us, else by what it says.
+                got.device = crate::peers::name_of(&cfg.home, p).or(got.device.take()).map(|d| format!("{d} (PC)"));
+                got.fetch = false;
+                got.phone_id = None;
+                got.peers.clear();
+            }
+            if !got.peers.is_empty() {
+                got.introduced = crate::peers::merge(&cfg.home, &cfg.id, std::mem::take(&mut got.peers));
+            }
             let count = (got.files.len() + got.texts.len()).min(u16::MAX as usize) as u16;
-            tx.write(&mut w, T_OK, &count.to_be_bytes(), &mut buf)?;
-            w.flush()?;
+            if got.fetch {
+                let mut w = io::BufWriter::with_capacity(CHUNK + 64, w);
+                let entries = crate::outbox::pending(&cfg.home, got.device.as_deref(), got.phone_id.as_deref());
+                let mut items = vec![];
+                for e in &entries {
+                    items.extend(e.files.iter().cloned().map(crate::client::Item::File));
+                    items.extend(e.texts.iter().cloned().map(crate::client::Item::Text));
+                }
+                crate::client::write_items(&mut tx, &mut w, &items, &mut buf)?;
+                tx.write(&mut w, T_OK, &[&count.to_be_bytes()[..], &[OK_V2]].concat(), &mut buf)?;
+                w.flush()?;
+                // Removed only once the phone says it has them all; otherwise they wait for next time.
+                if !entries.is_empty() {
+                    if let Ok(Some(T_OK)) = rx.read(&mut r, &mut buf) {
+                        crate::outbox::delivered(&cfg.home, &entries.iter().map(|e| e.id.clone()).collect::<Vec<_>>());
+                        got.fetched = items.len();
+                    }
+                }
+            } else {
+                let waiting = peer.is_none() && crate::outbox::waiting(&cfg.home, got.device.as_deref(), got.phone_id.as_deref());
+                let flags = OK_V2 | if waiting { OK_WAITING } else { 0 };
+                tx.write(&mut w, T_OK, &[&count.to_be_bytes()[..], &[flags]].concat(), &mut buf)?;
+                w.flush()?;
+            }
             Ok(got)
         }
         Err(e) => {
@@ -302,6 +394,12 @@ fn receive(
                 let name: String = String::from_utf8_lossy(body).chars().filter(|c| !c.is_control()).take(64).collect();
                 got.device = Some(name.trim().to_string()).filter(|n| !n.is_empty());
             }
+            T_FETCH => got.fetch = true,
+            T_PHONE => {
+                let id: String = String::from_utf8_lossy(body).chars().filter(char::is_ascii_alphanumeric).take(32).collect();
+                got.phone_id = Some(id).filter(|i| !i.is_empty());
+            }
+            T_PEERS => got.peers = crate::peers::parse_list(body),
             T_OPTS => {
                 let flags = body.first().copied().unwrap_or(0);
                 got.nearby = flags & OPT_NEARBY != 0;

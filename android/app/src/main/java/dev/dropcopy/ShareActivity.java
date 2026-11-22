@@ -7,7 +7,10 @@ import android.net.Uri;
 import android.os.Bundle;
 import java.util.ArrayList;
 
-/** The share-sheet entry. No UI: it hands everything to SendService and closes. */
+/**
+ * The share-sheet entry. It hands everything to SendService and closes; a picture sent to
+ * another phone first warps away into the top of the screen.
+ */
 public class ShareActivity extends Activity {
     @Override
     @SuppressWarnings("deprecation")
@@ -33,9 +36,45 @@ public class ShareActivity extends Activity {
             if (t != null) text = t.toString();
         }
 
-        // Tapped a PC's own icon in the share sheet's top row.
+        // The icon in the share sheet's top row picks the PC by itself (null). An icon for one PC
+        // ("pc-<id>") came from an older version; the system may still offer it for a while.
         String shortcut = in.getStringExtra(Intent.EXTRA_SHORTCUT_ID);
         String pc = shortcut != null && shortcut.startsWith("pc-") ? shortcut.substring(3) : null;
+        if (pc != null && Store.pcs(this).size() > 1) pc = null;
+
+        // A paired phone's icon, or no PC but a phone: to that phone, and a picture warps away.
+        String phone = shortcut != null && shortcut.startsWith(Store.PHONE_SHORTCUT) ? shortcut.substring(Store.PHONE_SHORTCUT.length()) : null;
+        if (phone == null && pc == null && Store.pcs(this).isEmpty() && !Store.phones(this).isEmpty()) {
+            phone = Store.phones(this).get(0).hexId();
+        }
+        if (phone != null && (!uris.isEmpty() || text != null)) {
+            SendService.start(this, uris, text, SendService.PHONE + phone);
+            Uri picture = null;
+            for (Uri u : uris) {
+                String mime = getContentResolver().getType(u);
+                if (mime != null && mime.startsWith("image/")) {
+                    picture = u;
+                    break;
+                }
+            }
+            WarpView warp = picture == null ? null : WarpView.create(this, picture, true);
+            if (warp != null) {
+                // Drawn edge to edge, over the status bar and round the camera, where the hole is.
+                android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
+                lp.layoutInDisplayCutoutMode = android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
+                getWindow().setAttributes(lp);
+                getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS);
+                setContentView(warp);
+                warp.play(() -> {
+                    finish();
+                    overridePendingTransition(0, 0);
+                });
+                return;
+            }
+            finish();
+            overridePendingTransition(0, 0);
+            return;
+        }
 
         if (Store.pcs(this).isEmpty()) {
             Transfer.toast(this, "Pair your PC first");

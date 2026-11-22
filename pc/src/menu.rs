@@ -22,6 +22,8 @@ pub enum Icon {
     Qr,
     Update,
     Power,
+    Phone,
+    Laptop,
 }
 
 #[derive(Clone, Debug)]
@@ -220,6 +222,17 @@ fn icon_d(icon: Icon, px: f32, py: f32, x: f32, y: f32, z: f32) -> f32 {
             let arc = if gap { f32::MAX } else { ring.abs() };
             arc.min(seg(u, v, (8.0, 1.6), (8.0, 7.6)))
         }
+        Icon::Phone => {
+            // An upright phone with the punch-hole camera.
+            let body = rbox(u, v, 4.4, 1.2, 7.2, 13.6, 1.8).abs();
+            let hole = ((u - 8.0).powi(2) + (v - 3.4).powi(2)).sqrt() - 0.25;
+            body.min(hole)
+        }
+        Icon::Laptop => {
+            // Screen and a wider base.
+            let screen = rbox(u, v, 2.6, 2.6, 10.8, 7.6, 1.2).abs();
+            screen.min(seg(u, v, (0.9, 12.6), (15.1, 12.6)))
+        }
     };
     (d - half) / k
 }
@@ -314,6 +327,8 @@ pub enum Dot {
     Connected,
     Unstable,
     Offline,
+    /// No dot: the header says something other than a status.
+    Hidden,
 }
 
 pub fn dot_color(d: Dot, t: &Theme) -> [u8; 3] {
@@ -321,8 +336,12 @@ pub fn dot_color(d: Dot, t: &Theme) -> [u8; 3] {
         Dot::Connected => t.ok,
         Dot::Unstable => [0xF2, 0xB2, 0x2E],
         Dot::Offline => t.muted,
+        Dot::Hidden => t.panel,
     }
 }
+
+/// The command id the owner gets when the menu closes without a choice.
+pub const DISMISSED: usize = 0;
 
 /// Windows: the menu window itself. `phones` is how many phones to draw in the header (0: the
 /// app icon instead).
@@ -444,7 +463,8 @@ mod imp {
         let body_f = font(13.0 * s, 400);
         let small_f = font(12.5 * s, 400);
         text(dc, &m.title, title_f, m.theme.text, RECT { left: l.text_x as i32, top: l.title_y as i32, right, bottom: (l.title_y + 22.0 * s) as i32 }, DT_LEFT | DT_TOP);
-        text(dc, &m.status, small_f, m.theme.muted, RECT { left: (l.text_x + 13.0 * s) as i32, top: l.status_y as i32, right, bottom: (l.status_y + 18.0 * s) as i32 }, DT_LEFT | DT_TOP);
+        let indent = if m.dot == m.theme.panel { 0.0 } else { 13.0 * s };
+        text(dc, &m.status, small_f, m.theme.muted, RECT { left: (l.text_x + indent) as i32, top: l.status_y as i32, right, bottom: (l.status_y + 18.0 * s) as i32 }, DT_LEFT | DT_TOP);
         for (i, it) in m.items.iter().enumerate() {
             let (a0, a1) = l.rows[i];
             let rect = RECT { left: (pxl + 52.0 * s) as i32, top: a0 as i32, right, bottom: a1 as i32 };
@@ -479,6 +499,15 @@ mod imp {
         let _ = ShowWindow(hwnd, SW_HIDE);
         MENU.with(|m| m.borrow_mut().take());
         let _ = DestroyWindow(hwnd);
+    }
+
+    /// Closed without a choice (clicked away, Escape): the owner hears `DISMISSED`.
+    unsafe fn dismiss(hwnd: HWND) {
+        let owner = MENU.with(|m| m.borrow().as_ref().map(|m| m.owner));
+        close(hwnd);
+        if let Some(o) = owner {
+            let _ = PostMessageW(o, WM_COMMAND, WPARAM(super::DISMISSED), LPARAM(0));
+        }
     }
 
     unsafe fn pick(hwnd: HWND, i: usize) {
@@ -539,7 +568,7 @@ mod imp {
                 match MENU.with(|m| m.borrow().as_ref().map(|m| (hit(&m.layout, &m.items, x, y), m.layout.panel))) {
                     Some((Some(i), _)) => pick(hwnd, i),
                     // Outside the panel (in the shadow): dismiss, like clicking away.
-                    Some((None, (px, py, pw, ph))) if x < px || x > px + pw || y < py || y > py + ph => close(hwnd),
+                    Some((None, (px, py, pw, ph))) if x < px || x > px + pw || y < py || y > py + ph => dismiss(hwnd),
                     _ => {}
                 }
                 LRESULT(0)
@@ -547,7 +576,7 @@ mod imp {
             WM_KEYDOWN => {
                 let key = wp.0 as u16;
                 if key == VK_ESCAPE.0 {
-                    close(hwnd);
+                    dismiss(hwnd);
                 } else if key == VK_UP.0 || key == VK_DOWN.0 {
                     let next = MENU.with(|m| {
                         m.borrow().as_ref().and_then(|m| {
@@ -573,7 +602,7 @@ mod imp {
             }
             // Clicking anywhere else, or switching apps, closes it.
             WM_ACTIVATE if (wp.0 & 0xffff) as u32 == WA_INACTIVE => {
-                close(hwnd);
+                dismiss(hwnd);
                 LRESULT(0)
             }
             _ => DefWindowProcW(hwnd, msg, wp, lp),

@@ -41,6 +41,8 @@ public class BatteryTest {
     @Test
     public void nothingRunsInTheBackgroundUntilAFeatureIsOn() {
         Store.add(app, LINK);
+        // Receiving from PCs is on by default; with it off, nothing else is.
+        Store.setFlag(app, Store.RECEIVE, false);
         Robolectric.buildActivity(MainActivity.class).setup().pause().stop();
         WatchService.sync(app);
         Intent started;
@@ -49,6 +51,29 @@ public class BatteryTest {
         }
         assertNull("no wake lock", ShadowPowerManager.getLatestWakeLock());
         assertTrue("no media observer", shadowOf(app.getContentResolver()).getContentObservers(MediaStore.Images.Media.EXTERNAL_CONTENT_URI).isEmpty());
+    }
+
+    @Test
+    public void receivingListensOnlyWhileTheScreenIsOnAndNeverUsesBluetooth() {
+        Store.add(app, LINK);
+        PowerManager pm = app.getSystemService(PowerManager.class);
+        shadowOf(pm).setIsInteractive(true);
+        WatchService s = Robolectric.buildService(WatchService.class).create().startCommand(0, 1).get();
+        assertTrue("listening with the screen on", s.linkNow());
+        assertFalse("no Bluetooth for receiving", s.advertisingNow());
+
+        shadowOf(pm).setIsInteractive(false);
+        app.sendBroadcast(new Intent(Intent.ACTION_SCREEN_OFF));
+        shadowOf(android.os.Looper.getMainLooper()).idle();
+        assertFalse("asleep with the screen off", s.linkNow());
+
+        shadowOf(pm).setIsInteractive(true);
+        app.sendBroadcast(new Intent(Intent.ACTION_SCREEN_ON));
+        shadowOf(android.os.Looper.getMainLooper()).idle();
+        assertTrue("back when the screen comes on", s.linkNow());
+        s.onDestroy();
+        assertFalse(s.linkNow());
+        assertNull("no wake lock", ShadowPowerManager.getLatestWakeLock());
     }
 
     @Test

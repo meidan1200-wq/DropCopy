@@ -20,6 +20,8 @@
     <!-- Android 14+: lets the user pick "Select photos"; the app then asks for all of them. -->
     <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <!-- A picture from another phone pours out of the top of the screen (drawn for two seconds, no touches). -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
         android:allowBackup="false"
@@ -88,7 +90,7 @@
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Sends each new screenshot to the user's own PC on the local network, and lets that PC notice the phone nearby over Bluetooth LE" />
+                android:value="Sends each new screenshot to the user's own PC on the local network, lets that PC notice the phone nearby over Bluetooth LE, and receives from the user's paired phones while the screen is on" />
         </service>
 
         <service
