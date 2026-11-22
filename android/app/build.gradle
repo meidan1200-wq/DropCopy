@@ -50,6 +50,9 @@ android {
         unitTests {
             includeAndroidResources = true
             all {
+                // Robolectric downloads each Android version's jar (150-200 MB) itself. Maven Central
+                // now answers those from CI with 429 Too Many Requests, so take them from Google's mirror.
+                systemProperty "robolectric.dependency.repo.url", "https://maven-central.storage-download.googleapis.com/maven2"
                 // Point these at a running `dropcopy` receiver to include the live-network tests.
                 environment "DROPCOPY_TEST_LINK", System.getenv("DROPCOPY_TEST_LINK") ?: ""
                 environment "DROPCOPY_TEST_DIR", System.getenv("DROPCOPY_TEST_DIR") ?: ""
